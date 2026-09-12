@@ -1,0 +1,46 @@
+# --- Clock: kunci 240 MHz, JANGAN pakai dynamic frequency scaling -------
+# DFS/light-sleep mengubah frekuensi APB secara dinamis -> menggeser
+# resolusi/akurasi tick cdi_timebase dan menambah latensi bangun dari
+# sleep tepat saat pulsa pickup datang. Untuk CDI, determinisme > hemat
+# daya, jadi PM dimatikan total (bukan cuma dikunci ke 240 MHz).
+CONFIG_ESP32_DEFAULT_CPU_FREQ_240=y
+CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ=240
+CONFIG_PM_ENABLE=n
+
+# --- FreeRTOS tick 1000 Hz supaya task 1 ms benar-benar granular 1 ms ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- Brownout detector -----------------------------------------------
+# Level 7 = ambang TERENDAH yang tersedia (~2.43V pada rel 3V3 RTC), jadi
+# paling toleran terhadap dip transien. INI BUKAN PENGGANTI perbaikan
+# hardware catu daya (lihat README bagian Brownout) -- ini hanya
+# menghindari reset "phantom" dari noise singkat setelah catu daya sudah
+# dibuat layak. Kalau board masih brown-out di level ini, masalahnya di
+# hardware, bukan di ambang deteksi.
+CONFIG_ESP32_BROWNOUT_DET=y
+CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_7=y
+
+# --- ISR/IRAM safety untuk peripheral yang dipakai di jalur real-time ---
+# Nama simbol Kconfig ini bisa berbeda sedikit antar versi ESP-IDF --
+# verifikasi lewat `idf.py menuconfig` (cari "IRAM") bila build gagal
+# menemukan opsi ini persis.
+CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y
+CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM=y
+CONFIG_GPTIMER_ISR_IRAM_SAFE=y
+CONFIG_GPTIMER_ISR_HANDLER_IN_IRAM=y
+
+# --- Watchdog: task wdt aktif untuk task 1 kHz kita, timeout longgar ----
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+
+# --- Log level: kurangi verbosity default agar tidak membebani UART/CPU
+# secara acak saat mesin hidup (logging dari ISR/di jalur panas DILARANG,
+# tapi bahkan logging biasa yang sering bisa menambah beban CPU/serial).
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- Bluetooth: NimBLE saja (host ringan), controller klasik dimatikan --
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_CONTROLLER_ONLY=n
+CONFIG_BT_BLUEDROID_ENABLED=n
