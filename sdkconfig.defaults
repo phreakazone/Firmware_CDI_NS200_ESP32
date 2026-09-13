@@ -3,31 +3,61 @@
 # resolusi/akurasi tick cdi_timebase dan menambah latensi bangun dari
 # sleep tepat saat pulsa pickup datang. Untuk CDI, determinisme > hemat
 # daya, jadi PM dimatikan total (bukan cuma dikunci ke 240 MHz).
-CONFIG_ESP32_DEFAULT_CPU_FREQ_240=y
-CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ=240
+# Nama simbol di bawah sudah versi ESP-IDF v6.1 (CONFIG_ESP32_DEFAULT_CPU_FREQ_*
+# yang lama otomatis dipetakan ke sini lewat sdkconfig.rename kalau kamu
+# pakai versi lebih tua -- tidak akan error, tapi ini nama yang seharusnya).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 CONFIG_PM_ENABLE=n
 
 # --- FreeRTOS tick 1000 Hz supaya task 1 ms benar-benar granular 1 ms ---
 CONFIG_FREERTOS_HZ=1000
 
 # --- Brownout detector -----------------------------------------------
-# Level 7 = ambang TERENDAH yang tersedia (~2.43V pada rel 3V3 RTC), jadi
-# paling toleran terhadap dip transien. INI BUKAN PENGGANTI perbaikan
-# hardware catu daya (lihat README bagian Brownout) -- ini hanya
-# menghindari reset "phantom" dari noise singkat setelah catu daya sudah
-# dibuat layak. Kalau board masih brown-out di level ini, masalahnya di
-# hardware, bukan di ambang deteksi.
-CONFIG_ESP32_BROWNOUT_DET=y
-CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_7=y
+# DIPERBAIKI: sebelumnya file ini menulis CONFIG_ESP32_BROWNOUT_DET_LVL_SEL_7
+# dengan asumsi level 7 = ~2.43V (paling toleran). Itu TERBALIK. Simbol Kconfig
+# resmi ESP-IDF (components/esp_system/port/soc/esp32/Kconfig.system) adalah
+# CONFIG_ESP_BROWNOUT_DET_LVL_SEL_x (TANPA "32"), dengan pemetaan:
+#   LVL_SEL_0 = 2.43V  <- PALING TOLERAN (yang sebenarnya kita mau)
+#   LVL_SEL_1 = 2.48V
+#   LVL_SEL_2 = 2.58V
+#   LVL_SEL_3 = 2.62V
+#   LVL_SEL_4 = 2.67V
+#   LVL_SEL_5 = 2.70V
+#   LVL_SEL_6 = 2.77V
+#   LVL_SEL_7 = 2.80V  <- PALING SENSITIF (kebalikan dari yang diinginkan)
+# Karena nama simbol lama juga salah ketik (ada "32" yang tidak match apa pun
+# di Kconfig asli), kemungkinan besar nilai itu diam-diam diabaikan build
+# system -- TAPI sdkconfig hasil generate di repo tetap menunjukkan level 7
+# aktif, jadi ini bukan sekadar typo kosmetik, levelnya benar-benar salah.
+#
+# INGAT (lihat README migrasi/percakapan sebelumnya): level 0 ini SUDAH
+# ambang paling toleran yang tersedia di silikon ESP32. Kalau brownout masih
+# terjadi di level ini, rel 3.3V kamu memang ambruk secara fisik -- perbaikan
+# sesungguhnya ada di hardware catu daya (buck regulator, kapasitor bulk,
+# ground star-point), BUKAN di angka ini.
+CONFIG_ESP_BROWNOUT_DET=y
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y
 
 # --- ISR/IRAM safety untuk peripheral yang dipakai di jalur real-time ---
 # Nama simbol Kconfig ini bisa berbeda sedikit antar versi ESP-IDF --
-# verifikasi lewat `idf.py menuconfig` (cari "IRAM") bila build gagal
-# menemukan opsi ini persis.
+# verifikasi lewat `idf.py menuconfig` (cari "IRAM" atau "cache") bila build
+# gagal menemukan opsi ini persis. Di v6.1, GPTIMER_ISR_IRAM_SAFE dan
+# MCPWM_ISR_IRAM_SAFE sudah berganti nama jadi *_ISR_CACHE_SAFE -- nama baru
+# ini malah lebih tepat menjelaskan maksudnya: yang dijamin bukan sekadar
+# "kodenya di IRAM", tapi "ISR ini tetap jalan walau cache flash sedang
+# nonaktif karena ada operasi tulis flash lain" -- itulah properti yang
+# sebenarnya kita butuhkan di jalur pickup/gate.
 CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y
 CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM=y
-CONFIG_GPTIMER_ISR_IRAM_SAFE=y
+CONFIG_GPTIMER_ISR_CACHE_SAFE=y
 CONFIG_GPTIMER_ISR_HANDLER_IN_IRAM=y
+# Ditambahkan: charger PWM (cdi_board_esp32.c) juga pakai MCPWM. Tidak
+# sekritis jalur pickup/gate (charger cuma diupdate tiap 10ms lewat task,
+# bukan dari ISR pickup), tapi tidak ada ruginya dikunci IRAM juga untuk
+# pertahanan berlapis kalau nanti kamu pindahkan sebagian logikanya ke ISR.
+CONFIG_MCPWM_CTRL_FUNC_IN_IRAM=y
+CONFIG_MCPWM_ISR_CACHE_SAFE=y
 
 # --- Watchdog: task wdt aktif untuk task 1 kHz kita, timeout longgar ----
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=5

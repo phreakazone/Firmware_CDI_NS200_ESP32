@@ -7,6 +7,8 @@
 #include "cdi_r5_ble.h"
 #include "cdi_r8_oem_learn.h"
 #include "cdi_r8_ota.h"
+#include "cdi_selftest.h" /* uji jitter tanpa osiloskop, lihat INSTRUKSI.md -- aman ditinggal
+                             terpasang di produksi selama cdi_selftest_init() tidak dipanggil */
 
 #include "driver/gpio.h"
 #include "esp_attr.h"
@@ -180,6 +182,7 @@ static bool IRAM_ATTR center_slot_cb(void *ctx, uint64_t due, uint64_t *next)
 {
     (void)ctx;
     if (!s_center_high) {
+        cdi_selftest_mark_center_due(due); /* uji jitter, lihat cdi_selftest.h */
         gpio_set_level(CDI_PIN_GATE_CENTER, 1);
         s_center_high = true;
         *next = due + s_center_width;
