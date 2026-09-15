@@ -45,16 +45,16 @@ typedef bool (*cdi_tb_slot_cb_t)(void *ctx, uint64_t due_tick, uint64_t *next_ti
 void cdi_timebase_init(void);
 
 /* Baca counter master. Aman dipanggil dari ISR (IRAM). */
-uint64_t IRAM_ATTR cdi_timebase_now(void);
+uint64_t cdi_timebase_now(void);
 
 /* Pasang/replace handler untuk sebuah slot (dipanggil sekali saat boot). */
 void cdi_timebase_set_slot_handler(cdi_tb_slot_t slot, cdi_tb_slot_cb_t cb, void *ctx);
 
 /* Jadwalkan slot untuk berbunyi pada tick absolut tertentu. Aman dipanggil
  * dari ISR (IRAM) maupun task biasa (dilindungi critical section pendek). */
-void IRAM_ATTR cdi_timebase_arm(cdi_tb_slot_t slot, uint64_t target_tick);
+void cdi_timebase_arm(cdi_tb_slot_t slot, uint64_t target_tick);
 
 /* Matikan slot (dipakai saat force-safe / output_permission hilang). */
-void IRAM_ATTR cdi_timebase_disarm(cdi_tb_slot_t slot);
+void cdi_timebase_disarm(cdi_tb_slot_t slot);
 
 #endif

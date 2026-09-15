@@ -1,0 +1,2 @@
+source I:/DEV/CDI/Firmware_CDI_NS200_ESP32/build/bootloader/gdbinit/symbols
+source I:/DEV/CDI/Firmware_CDI_NS200_ESP32/build/bootloader/gdbinit/connect
