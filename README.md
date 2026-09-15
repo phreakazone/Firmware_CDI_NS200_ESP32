@@ -27,7 +27,19 @@ ditulis ulang. Status per modul:
 | **Stack BLE (NimBLE)** (`cdi_ble_nimble.c`) | **Compile & link sukses** (build log terverifikasi, `ns200_cdi_esp32.bin` ter-generate) | **Konektivitas radio sungguhan (scan/pairing/GATT dari HP) BELUM diuji.** Jangan anggap ini "selesai" sampai lolos tes nRF Connect di §5. |
 | **BLE OTA** (`esp_ota_ops`) | Kode terpasang, compile sukses | Belum pernah dicoba kirim data OTA sungguhan. Uji dengan data dummy dulu, bukan firmware asli (lihat §5). |
 | **Brownout detector** | **Bug ditemukan & diperbaiki** | Lihat §4 — versi sebelumnya salah level (Level 7, bukan Level 0), sekarang sudah benar dan **terverifikasi lewat isi `sdkconfig` hasil generate**, bukan cuma `sdkconfig.defaults`. |
-| **Self-test jitter tanpa osiloskop** (`cdi_selftest.c`) | **Baru ditambahkan, compile sukses** | Modul loopback untuk mengukur jitter pakai ESP32 itu sendiri sebagai alat ukur — lihat §3.1. Hasil pengukuran aktual masih menunggu sesi bangku. |
+| **Self-test jitter tanpa osiloskop** (`cdi_selftest.c`) | **Aktif & terintegrasi penuh** — hook di `cdi_engine_esp32.c` + `cdi_selftest_init()` terpasang di `main.c` | Lihat §3.1. Sudah siap dipakai di meja; angka jitter aktual masih menunggu sesi bangku dengan pickup simulasi. |
+
+> **Catatan soal branch `codex/r9-universal-firmware`:** ada pengembangan lanjutan
+> (batas RPM 30.000, peta 32×16, profil mesin universal, kalibrasi suhu, live
+> dyno trim) di branch itu, sudah diverifikasi identik antara repo STM32 dan
+> ESP32 (diff `cdi_r5.c` kosong). **Belum di-merge ke `main`** karena mengubah
+> token handshake BLE (`PONG_R7_2` -> `PONG_R9`) dan format penyimpanan
+> (`STORE_VERSION` naik) — breaking change untuk unit yang sudah terpasang di
+> lapangan dengan firmware `main` saat ini. Aplikasi Android pendamping
+> (`CDI_STM32_Android`) sudah lebih dulu mengirim sebagian perintah gaya R9,
+> tapi punya bug terpisah (pengecekan token PONG belum menerima `PONG_R9`) yang
+> sudah dipatch di repo itu. Merge R9 ke `main` di sini adalah keputusan
+> terpisah yang belum diambil.
 
 ## 1. Peta Pin (ESP32-WROOM-32 DevKit)
 
@@ -120,8 +132,9 @@ mengukurnya sebelum percaya penuh.
 
 ### 3.1 Mengukur jitter tanpa osiloskop (`cdi_selftest.c`)
 
-Modul baru yang menjadikan ESP32 sendiri sebagai alat ukur, untuk yang tidak
-punya osiloskop. Prinsipnya: `cdi_timebase.c` sudah tahu persis tick
+**Status: aktif secara default** — `cdi_selftest_init()` sudah dipanggil dari
+`main.c`. Modul ini menjadikan ESP32 sendiri sebagai alat ukur, untuk yang
+tidak punya osiloskop. Prinsipnya: `cdi_timebase.c` sudah tahu persis tick
 target (`due`) kapan gate CENTER seharusnya menyala. Dengan kabel jumper
 loopback dari `GPIO25` (gate center) ke `GPIO5` (input bebas), ESP32 bisa
 menangkap kapan edge itu **sungguh-sungguh** terjadi (diukur dari jam yang
@@ -142,10 +155,12 @@ Cara pakai:
    dicari — idealnya sub-mikrodetik sampai beberapa mikrodetik saja di
    berbagai titik RPM simulasi.
 
-File `cdi_selftest.h`/`cdi_selftest.c` ada di `main/`, aman ditinggal
-terpasang di build produksi asal `cdi_selftest_init()` tidak dipanggil di
-`main.c` dan kabel jumpernya dilepas — pin `GPIO5` idle tanpa jumper tidak
-mengganggu operasi normal.
+File `cdi_selftest.h`/`cdi_selftest.c` ada di `main/`, dipanggil otomatis dari
+`main.c`. Aman ditinggal aktif di build produksi (pin `GPIO5` idle tanpa
+jumper tidak mengganggu operasi normal), tapi untuk build final yang dipasang
+permanen di motor, comment baris `cdi_selftest_init();` di `main.c` supaya
+task pelapor & ISR loopback tidak berjalan sia-sia, dan pastikan kabel
+jumpernya sudah dilepas.
 
 ## 4. Mitigasi Brownout
 
@@ -235,8 +250,12 @@ Build sukses **bukan berarti siap pasang ke motor**. Urutan validasi:
   tegangan fisik di board kamu.
 - **Verifikasi BLE/OTA fungsional** (§5 poin 2 & 6) — belum dilakukan
   sampai dokumen ini ditulis.
-- **Pengukuran jitter aktual** (§3.1 atau osiloskop) — belum dilakukan
-  sampai dokumen ini ditulis.
+- **Pengukuran jitter aktual**: alat (`cdi_selftest.c`, §3.1) sudah aktif dan
+  siap pakai, tapi sesi pengukuran sungguhan dengan pickup simulasi belum
+  dilakukan sampai dokumen ini ditulis — lihat §5 langkah 4.
+- **Merge branch `codex/r9-universal-firmware` ke `main`**: keputusan
+  terbuka, lihat catatan di §0. Butuh koordinasi dengan update app Android
+  (`CDI_STM32_Android`) karena breaking change protokol BLE.
 
 ## 7. Log Verifikasi
 
@@ -259,6 +278,26 @@ transparansi:
   benar-benar terpasang (setelah menghapus `sdkconfig` lama yang masih
   menyimpan nilai salah).
 - Modul `cdi_selftest.c`/`.h` ditambahkan, ter-link sukses ke build.
+- Build penuh dijalankan ulang di toolchain ESP-IDF v6.1 sungguhan (bukan cuma
+  di sandbox verifikasi ini) — sukses, `ns200_cdi_esp32.bin` ter-generate.
+- Nilai `sdkconfig` hasil generate dicek langsung (`findstr`) dan dikonfirmasi
+  `CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y` benar-benar aktif (bukan cuma tertulis
+  di `.defaults`) setelah `sdkconfig` lama yang masih menyimpan nilai salah
+  dihapus dan di-generate ulang.
+- Beberapa nama opsi Kconfig ternyata berbeda antara ESP-IDF v5.3 (dipakai
+  saat menulis draf awal `sdkconfig.defaults`) dan v6.1 (yang sungguhan
+  dipakai) — `*_ISR_IRAM_SAFE` menjadi `*_ISR_CACHE_SAFE`,
+  `CONFIG_ESP32_DEFAULT_CPU_FREQ_*` menjadi `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ*`.
+  `sdkconfig.defaults` sudah diperbarui pakai nama v6.1.
+- **Seluruh rangkaian patch (`sdkconfig.defaults`, `main/cdi_selftest.h`,
+  `main/cdi_selftest.c`, `main/cdi_engine_esp32.c`, `main/CMakeLists.txt`,
+  `main/main.c`) sudah di-push ke branch `main` repo ini dan diverifikasi
+  ulang lewat `raw.githubusercontent.com` — isinya cocok byte-per-byte
+  dengan yang disiapkan di sesi ini, termasuk potongan terakhir
+  (`cdi_selftest_init()` di `main.c`) yang sempat tertinggal di push pertama.**
+- Branch `codex/r9-universal-firmware` ditemukan di repo ini maupun repo
+  STM32 (`Firmware_CDI_NS200`), diverifikasi `cdi_r5.c` identik di kedua
+  repo, dan diverifikasi belum di-merge ke `main` di keduanya.
 - **Belum dilakukan**: flash ke board fisik, scan BLE sungguhan, pengukuran
-  jitter aktual (osiloskop maupun `cdi_selftest`), uji OTA data dummy, uji
-  charger HV dengan osiloskop, kalibrasi ADC manual.
+  jitter aktual lewat `cdi_selftest` dengan pickup simulasi, uji OTA data
+  dummy, uji charger HV dengan osiloskop, kalibrasi ADC manual.
