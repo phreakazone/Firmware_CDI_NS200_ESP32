@@ -2,6 +2,7 @@
 #include "cdi_timebase.h"
 #include "cdi_engine_esp32.h"
 #include "cdi_ble_nimble.h"
+#include "cdi_selftest.h" /* uji jitter tanpa osiloskop -- lihat INSTRUKSI.md */
 
 #include "esp_log.h"
 #include "esp_system.h"
@@ -112,6 +113,7 @@ void app_main(void)
     cdi_board_charger_pwm_init();
     cdi_timebase_init();
     cdi_engine_init();
+    cdi_selftest_init();   /* HAPUS/comment baris ini untuk build produksi final di motor */
     cdi_ble_init();
 
     uart_driver_install(UART_CONSOLE_NUM, UART_BUF_SIZE * 2, 0, 0, NULL, 0);
