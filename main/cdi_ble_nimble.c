@@ -152,8 +152,8 @@ void cdi_ble_start_advertising(void)
     struct ble_gap_adv_params adv = { .conn_mode = BLE_GAP_CONN_MODE_UND, .disc_mode = BLE_GAP_DISC_MODE_GEN };
     struct ble_hs_adv_fields fields = {0};
     
-    fields.name = (const uint8_t *)"NS200-CDI-R7";
-    fields.name_len = strlen("NS200-CDI-R7");
+    fields.name = (const uint8_t *)"NS200-CDI";
+    fields.name_len = strlen("NS200-CDI");
     fields.name_is_complete = 1;
     ble_gap_adv_set_fields(&fields);
 
@@ -168,7 +168,7 @@ void cdi_ble_start_advertising(void)
 
 static void on_sync_cb(void)
 {
-    ESP_LOGI(TAG, "NimBLE sync, advertising as NS200-CDI-R7");
+    ESP_LOGI(TAG, "NimBLE sync, advertising as NS200-CDI");
     cdi_ble_start_advertising();
 }
 

@@ -1,4 +1,4 @@
-# Porting NS200 CDI R8: STM32WB55 → ESP32-WROOM-32
+# Porting NS200 CDI R9: STM32WB55 → ESP32-WROOM-32
 
 **Status saat ini: Build terverifikasi sukses (ESP-IDF v6.1), uji bangku sedang berjalan.**
 
@@ -217,7 +217,7 @@ Build sukses **bukan berarti siap pasang ke motor**. Urutan validasi:
    dan tidak ada reboot-loop dalam 10 detik pertama.
 2. **Scan BLE dengan aplikasi generik (nRF Connect/LightBlue) dulu**,
    sebelum aplikasi Android NS200 asli. Pastikan nama advertising
-   `NS200-CDI-R7` muncul dan lima characteristic (TELEM/COMMAND/RESPONSE/
+   `NS200-CDI` muncul dan lima characteristic (TELEM/COMMAND/RESPONSE/
    OTA_DATA/OTA_STATUS) terlihat dengan UUID `7a8f1000...1005`. Ini baru
    membuktikan GATT table benar-benar jalan di silikon, bukan cuma compile
    bersih.
