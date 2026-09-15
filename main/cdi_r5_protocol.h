@@ -14,11 +14,15 @@ typedef bool (*cdi_r5_persist_fn)(const cdi_r5_store_image_t *image,
 typedef struct {
     cdi_r5_store_image_t *store;
     cdi_r5_map_t working;
+    cdi_r5_map_t staging;
+    cdi_r5_map_t dyno_backup;
     uint32_t rpm;
     uint16_t tps_permille, tps_raw, hv_center, hv_side;
     uint16_t setup_trigger_cdeg, pickup_quality, strobe_samples, first_start_seconds;
+    int16_t temperature_cdeg, live_trim_cdeg;
+    bool temperature_valid, fan_output;
     bool hv_enabled, output_permission, pro_enabled, strobe_active;
-    bool firmware_update_active;
+    bool firmware_update_active, map_staging_active, dyno_active;
     cdi_r8_oem_learner_t *oem_learner;
     cdi_r8_ota_t *ota;
     cdi_r5_persist_fn persist;
