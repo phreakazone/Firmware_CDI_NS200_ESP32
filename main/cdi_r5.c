@@ -93,8 +93,13 @@ void cdi_r5_load_defaults(cdi_r5_store_image_t *image)
         .pulses_per_revolution=1u, .gate_pulse_us=80u,
         .first_start_hv_volts=220u, .first_start_rpm_limit=3000u,
         .first_start_advance_cap_cdeg=1000u, .fan_mode=CDI_R7_FAN_ON,
-        .operating_mode=CDI_R8_OP_MANUAL_SETUP, .pro_enabled=0u,
-        .diy_oem_unplug_confirmed=0u, .first_start_proven=0u
+        .operating_mode=CDI_R8_OP_MANUAL_SETUP, .pro_enabled=1u,
+        .diy_oem_unplug_confirmed=0u, .first_start_proven=0u,
+        .profile_name="UNIVERSAL", .profile_rpm_min=300u,
+        .profile_rpm_max=CDI_R5_ABSOLUTE_RPM_CAP,
+        .profile_advance_min_cdeg=CDI_R9_ADVANCE_MIN_CDEG,
+        .profile_advance_max_cdeg=CDI_R9_ADVANCE_MAX_CDEG,
+        .fan_on_cdeg=9500u, .fan_off_cdeg=9000u
     };
     image->oem_profile.magic = 0x384D454Fu; /* "OEM8" */
     image->oem_profile.version = 1u;
@@ -103,19 +108,41 @@ void cdi_r5_load_defaults(cdi_r5_store_image_t *image)
 
 cdi_r5_status_t cdi_r7_setup_validate(const cdi_r7_setup_t *s)
 {
+    bool temp_empty, temp_up, temp_down;
     if (s == NULL) return CDI_R5_ERR_ARGUMENT;
+    temp_empty = s->temp_adc[0] == 0u && s->temp_adc[1] == 0u &&
+                 s->temp_adc[2] == 0u;
+    temp_up = s->temp_adc[0] < s->temp_adc[1] &&
+              s->temp_adc[1] < s->temp_adc[2];
+    temp_down = s->temp_adc[0] > s->temp_adc[1] &&
+                s->temp_adc[1] > s->temp_adc[2];
     if (s->magic != CDI_R7_SETUP_MAGIC || s->version != CDI_R7_SETUP_VERSION ||
         s->stage > CDI_R7_STAGE_READY || s->pickup_edge > CDI_R7_EDGE_RISING ||
         s->trigger_angle_cdeg >= 36000u || s->side_offset_cdeg < -3000 ||
         s->side_offset_cdeg > 3000 || s->pulses_per_revolution < 1u ||
-        s->pulses_per_revolution > 4u || s->gate_pulse_us < 40u ||
+        s->pulses_per_revolution > CDI_R9_MAX_PPR || s->gate_pulse_us < 40u ||
         s->gate_pulse_us > 150u || s->first_start_hv_volts < 180u ||
         s->first_start_hv_volts > 250u || s->first_start_rpm_limit != 3000u ||
         s->first_start_advance_cap_cdeg > 1000u || s->center_enabled > 1u ||
         s->side_enabled > 1u || s->fan_mode > CDI_R7_FAN_AUTO ||
         s->operating_mode > CDI_R8_OP_DIY || s->pro_enabled > 1u ||
-        s->diy_oem_unplug_confirmed > 1u || s->first_start_proven > 1u)
+        s->diy_oem_unplug_confirmed > 1u || s->first_start_proven > 1u ||
+        s->profile_name[CDI_R5_NAME_LEN - 1u] != '\0' ||
+        s->profile_rpm_min < 100u ||
+        s->profile_rpm_min >= s->profile_rpm_max ||
+        s->profile_rpm_max > CDI_R5_ABSOLUTE_RPM_CAP ||
+        s->profile_advance_min_cdeg < CDI_R9_ADVANCE_MIN_CDEG ||
+        s->profile_advance_max_cdeg > CDI_R9_ADVANCE_MAX_CDEG ||
+        s->profile_advance_min_cdeg >= s->profile_advance_max_cdeg ||
+        s->fan_off_cdeg >= s->fan_on_cdeg || s->fan_on_cdeg > 20000u ||
+        (!temp_empty && !temp_up && !temp_down))
         return CDI_R5_ERR_MAP;
+    if (!temp_empty) {
+        unsigned i;
+        for (i = 0u; i < 3u; ++i)
+            if (s->temp_cdeg[i] < -4000 || s->temp_cdeg[i] > 20000)
+                return CDI_R5_ERR_MAP;
+    }
     if (s->tps_open_adc != 0u && s->tps_open_adc <= s->tps_closed_adc + 50u)
         return CDI_R5_ERR_MAP;
     if (s->stage < CDI_R7_STAGE_TDC_SAVED && (s->center_enabled || s->side_enabled))
@@ -137,30 +164,23 @@ static bool axis_valid(const uint16_t *axis, uint8_t count, uint16_t max)
 cdi_r5_status_t cdi_r5_map_validate(const cdi_r5_map_t *map, bool pro_unlocked)
 {
     uint8_t r, t;
-    uint16_t max_rpm;
-    int16_t max_advance;
+    (void)pro_unlocked; /* R9 has no artificial PRO firmware lock. */
     if (map == NULL) return CDI_R5_ERR_ARGUMENT;
-    if (map->mode > CDI_R5_MODE_PRO || map->limiter_type > CDI_R5_LIMITER_HARD)
-        return CDI_R5_ERR_MAP;
-    if (map->mode == CDI_R5_MODE_PRO && !pro_unlocked)
-        return CDI_R5_ERR_PRO_LOCKED;
-    if (map->mode == CDI_R5_MODE_NORMAL) {
-        if (map->rpm_count != 8u || map->tps_count != 4u ||
-            map->hv_target_volts != 285u) return CDI_R5_ERR_MAP;
-        max_rpm = 10500u; max_advance = 3600;
-    } else {
-        if (map->rpm_count != 16u || map->tps_count != 8u ||
-            map->hv_target_volts != 345u) return CDI_R5_ERR_MAP;
-        max_rpm = CDI_R5_ABSOLUTE_RPM_CAP; max_advance = 3600;
-    }
-    if (map->rpm_limit < 3000u || map->rpm_limit > max_rpm ||
-        map->soft_band_rpm < 100u || map->soft_band_rpm > 1000u ||
+    if (map->mode > CDI_R5_MODE_PRO ||
+        map->limiter_type > CDI_R5_LIMITER_HARD ||
+        map->rpm_count < 2u || map->rpm_count > CDI_R5_RPM_POINTS ||
+        map->tps_count < 2u || map->tps_count > CDI_R5_TPS_POINTS ||
+        map->rpm_limit < 500u || map->rpm_limit > CDI_R5_ABSOLUTE_RPM_CAP ||
+        map->soft_band_rpm > 3000u ||
+        map->hv_target_volts < 180u || map->hv_target_volts > 400u ||
         !axis_valid(map->rpm_axis, map->rpm_count, CDI_R5_ABSOLUTE_RPM_CAP) ||
-        !axis_valid(map->tps_axis, map->tps_count, 1000u)) return CDI_R5_ERR_MAP;
+        !axis_valid(map->tps_axis, map->tps_count, 1000u))
+        return CDI_R5_ERR_MAP;
     for (t = 0u; t < map->tps_count; ++t)
         for (r = 0u; r < map->rpm_count; ++r)
-            if (map->advance_cdeg[t][r] < 0 ||
-                map->advance_cdeg[t][r] > max_advance) return CDI_R5_ERR_MAP;
+            if (map->advance_cdeg[t][r] < CDI_R9_ADVANCE_MIN_CDEG ||
+                map->advance_cdeg[t][r] > CDI_R9_ADVANCE_MAX_CDEG)
+                return CDI_R5_ERR_MAP;
     return CDI_R5_OK;
 }
 
@@ -199,7 +219,7 @@ static int32_t lerp(int32_t y0, int32_t y1,
     return y0 + (int32_t)(((int64_t)(y1 - y0) * (x - x0)) / (x1 - x0));
 }
 
-int16_t CDI_R5_IRAM cdi_r5_map_interpolate(const cdi_r5_map_t *map,
+int16_t cdi_r5_map_interpolate(const cdi_r5_map_t *map,
                                uint32_t rpm, uint16_t tps_permille)
 {
     uint8_t ri = lower_segment(map->rpm_axis, map->rpm_count, rpm);
@@ -226,7 +246,7 @@ static cdi_r5_spark_action_t limiter_action(const cdi_r5_map_t *map,
     return ((*phase & 1u) == 0u) ? CDI_R5_SPARK_SOFT_CUT : CDI_R5_SPARK_FIRE;
 }
 
-cdi_r5_status_t CDI_R5_IRAM cdi_r5_make_decision(const cdi_r5_engine_config_t *engine,
+cdi_r5_status_t cdi_r5_make_decision(const cdi_r5_engine_config_t *engine,
                                      const cdi_r5_map_t *map,
                                      uint32_t period_ticks,
                                      uint16_t tps_permille,
@@ -253,8 +273,22 @@ cdi_r5_status_t CDI_R5_IRAM cdi_r5_make_decision(const cdi_r5_engine_config_t *e
     if (decision->rpm == 0u || decision->rpm > CDI_R5_ABSOLUTE_RPM_CAP + 1000u)
         return CDI_R5_ERR_PERIOD;
     decision->action = limiter_action(&effective, decision->rpm, soft_phase);
-    decision->advance_cdeg = cdi_r5_map_interpolate(&effective, decision->rpm, tps_permille);
-    if (engine->advance_cap_cdeg && decision->advance_cdeg > (int16_t)engine->advance_cap_cdeg)
+    {
+        int32_t advance = (int32_t)cdi_r5_map_interpolate(
+            &effective, decision->rpm, tps_permille) + engine->advance_trim_cdeg;
+        if (engine->advance_min_cdeg < engine->advance_max_cdeg) {
+            if (advance < engine->advance_min_cdeg) advance = engine->advance_min_cdeg;
+            if (advance > engine->advance_max_cdeg) advance = engine->advance_max_cdeg;
+        }
+        if (advance < CDI_R9_ADVANCE_MIN_CDEG) advance = CDI_R9_ADVANCE_MIN_CDEG;
+        if (advance > CDI_R9_ADVANCE_MAX_CDEG) advance = CDI_R9_ADVANCE_MAX_CDEG;
+        /* A BTDC request cannot be earlier than the configured pickup angle. */
+        if (advance > (int32_t)engine->trigger_angle_cdeg)
+            advance = engine->trigger_angle_cdeg;
+        decision->advance_cdeg = (int16_t)advance;
+    }
+    if (engine->advance_cap_cdeg &&
+        decision->advance_cdeg > (int16_t)engine->advance_cap_cdeg)
         decision->advance_cdeg = (int16_t)engine->advance_cap_cdeg;
     decision->hv_target_volts = engine->hv_target_override ? engine->hv_target_override : effective.hv_target_volts;
     decision->gate_width_ticks = (uint32_t)(((uint64_t)engine->timer_hz *
@@ -317,4 +351,54 @@ cdi_r5_status_t cdi_r5_save_slot(cdi_r5_store_image_t *image, uint8_t slot,
     image->active_slot = slot;
     cdi_r5_store_seal(image);
     return CDI_R5_OK;
+}
+
+
+static int16_t temperature_lerp(uint16_t x, uint16_t x0, int16_t y0,
+                                uint16_t x1, int16_t y1)
+{
+    int32_t dx = (int32_t)x1 - x0;
+    if (dx == 0) return y0;
+    return (int16_t)((int32_t)y0 +
+        ((int32_t)(y1 - y0) * ((int32_t)x - x0)) / dx);
+}
+
+bool cdi_r9_temperature_from_adc(const cdi_r7_setup_t *s, uint16_t adc,
+                                 int16_t *temperature_cdeg)
+{
+    bool up;
+    unsigned lo;
+    if (s == NULL || temperature_cdeg == NULL ||
+        s->temp_adc[0] == 0u || s->temp_adc[1] == 0u ||
+        s->temp_adc[2] == 0u)
+        return false;
+    up = s->temp_adc[0] < s->temp_adc[1] &&
+         s->temp_adc[1] < s->temp_adc[2];
+    if (!up && !(s->temp_adc[0] > s->temp_adc[1] &&
+                 s->temp_adc[1] > s->temp_adc[2]))
+        return false;
+    if ((up && adc <= s->temp_adc[0]) || (!up && adc >= s->temp_adc[0])) {
+        *temperature_cdeg = s->temp_cdeg[0];
+        return true;
+    }
+    if ((up && adc >= s->temp_adc[2]) || (!up && adc <= s->temp_adc[2])) {
+        *temperature_cdeg = s->temp_cdeg[2];
+        return true;
+    }
+    lo = ((up && adc <= s->temp_adc[1]) ||
+          (!up && adc >= s->temp_adc[1])) ? 0u : 1u;
+    *temperature_cdeg = temperature_lerp(adc, s->temp_adc[lo],
+        s->temp_cdeg[lo], s->temp_adc[lo + 1u], s->temp_cdeg[lo + 1u]);
+    return true;
+}
+
+bool cdi_r9_fan_update(const cdi_r7_setup_t *s, int16_t temperature_cdeg,
+                       bool temperature_valid, bool previous_output)
+{
+    if (s == NULL || s->fan_mode == CDI_R7_FAN_OFF) return false;
+    if (s->fan_mode == CDI_R7_FAN_ON) return true;
+    if (!temperature_valid) return true; /* AUTO fails safe on sensor/calibration loss. */
+    if (previous_output)
+        return temperature_cdeg > (int16_t)s->fan_off_cdeg;
+    return temperature_cdeg >= (int16_t)s->fan_on_cdeg;
 }

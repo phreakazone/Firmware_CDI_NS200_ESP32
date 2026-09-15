@@ -25,7 +25,10 @@ void cdi_r5_protocol_init(cdi_r5_protocol_t *p, cdi_r5_store_image_t *store)
     memset(p, 0, sizeof(*p));
     p->store = store;
     p->working = store->slots[store->active_slot];
+    p->staging = p->working;
+    p->dyno_backup = p->working;
     p->setup_trigger_cdeg = store->setup.trigger_angle_cdeg;
+    p->temperature_cdeg = INT16_MIN;
 }
 
 void cdi_r5_protocol_set_persist(cdi_r5_protocol_t *p,
@@ -84,6 +87,17 @@ static bool parse_uint(const char *s, unsigned long max, unsigned long *value)
 
 static bool setup_can_write(const cdi_r5_protocol_t *p)
 { return p->rpm == 0u && !p->hv_enabled && p->hv_center < 30u && p->hv_side < 30u; }
+
+static bool parse_int(const char *s, long min, long max, long *value)
+{
+    char *end;
+    long v;
+    if (s == NULL || *s == '\0') return false;
+    v = strtol(s, &end, 10);
+    if (*end != '\0' || v < min || v > max) return false;
+    *value = v;
+    return true;
+}
 
 static bool persist_store(cdi_r5_protocol_t *p)
 {
@@ -217,7 +231,7 @@ static size_t handle_setup(cdi_r5_protocol_t *p, unsigned long seq, char **save,
         if (!persist_store(p)){p->store->setup=old; return error_frame(seq,"FLASH",out,out_size);}
         return make_frame(seq,"ACK,EDGE_REQUIRES_PICKUP_TDC",out,out_size);
     }
-    if (!strcmp(op,"PPR") && parse_uint(strtok_r(NULL,",",save),4u,&a) && a>=1u) {
+    if (!strcmp(op,"PPR") && parse_uint(strtok_r(NULL,",",save),CDI_R9_MAX_PPR,&a) && a>=1u) {
         if (!setup_can_write(p)) return error_frame(seq,"STOP_ENGINE_WAIT_HV_LT30",out,out_size);
         old=p->store->setup; p->store->setup.pulses_per_revolution=(uint16_t)a;
         if (p->store->setup.stage>CDI_R7_STAGE_PICKUP_OK) p->store->setup.stage=CDI_R7_STAGE_PICKUP_OK;
@@ -299,6 +313,240 @@ static size_t handle_setup(cdi_r5_protocol_t *p, unsigned long seq, char **save,
     return error_frame(seq,"SETUP_UNKNOWN",out,out_size);
 }
 
+
+static bool persist_working(cdi_r5_protocol_t *p)
+{
+    cdi_r5_map_t old = p->store->slots[p->store->active_slot];
+    p->store->slots[p->store->active_slot] = p->working;
+    if (!persist_store(p)) {
+        p->store->slots[p->store->active_slot] = old;
+        cdi_r5_store_seal(p->store);
+        return false;
+    }
+    return true;
+}
+
+static size_t handle_r9_map(cdi_r5_protocol_t *p, unsigned long seq, char **save,
+                            char *out, size_t out_size)
+{
+    const char *op = strtok_r(NULL, ",", save);
+    unsigned long a, b;
+    long signed_value;
+    if (op == NULL) return error_frame(seq, "MAP_COMMAND", out, out_size);
+    if (!strcmp(op, "BEGIN")) {
+        if (!setup_can_write(p) ||
+            !parse_uint(strtok_r(NULL, ",", save), CDI_R5_RPM_POINTS, &a) ||
+            !parse_uint(strtok_r(NULL, ",", save), CDI_R5_TPS_POINTS, &b) ||
+            a < 2u || b < 2u)
+            return error_frame(seq, "MAP_BEGIN", out, out_size);
+        p->staging = p->working;
+        memset(p->staging.rpm_axis, 0, sizeof(p->staging.rpm_axis));
+        memset(p->staging.tps_axis, 0, sizeof(p->staging.tps_axis));
+        memset(p->staging.advance_cdeg, 0, sizeof(p->staging.advance_cdeg));
+        p->staging.rpm_count = (uint8_t)a;
+        p->staging.tps_count = (uint8_t)b;
+        p->map_staging_active = true;
+        return make_frame(seq, "ACK,MAP_BEGIN", out, out_size);
+    }
+    if (!p->map_staging_active || !setup_can_write(p))
+        return error_frame(seq, "MAP_BEGIN_FIRST", out, out_size);
+    if (!strcmp(op, "RPM") &&
+        parse_uint(strtok_r(NULL, ",", save), CDI_R5_RPM_POINTS - 1u, &a) &&
+        parse_uint(strtok_r(NULL, ",", save), CDI_R5_ABSOLUTE_RPM_CAP, &b) &&
+        a < p->staging.rpm_count) {
+        p->staging.rpm_axis[a] = (uint16_t)b;
+        return make_frame(seq, "ACK,MAP_RPM", out, out_size);
+    }
+    if (!strcmp(op, "LOAD") &&
+        parse_uint(strtok_r(NULL, ",", save), CDI_R5_TPS_POINTS - 1u, &a) &&
+        parse_uint(strtok_r(NULL, ",", save), 100u, &b) &&
+        a < p->staging.tps_count) {
+        p->staging.tps_axis[a] = (uint16_t)(b * 10u);
+        return make_frame(seq, "ACK,MAP_LOAD", out, out_size);
+    }
+    if (!strcmp(op, "CELL") &&
+        parse_uint(strtok_r(NULL, ",", save), CDI_R5_RPM_POINTS - 1u, &a) &&
+        parse_uint(strtok_r(NULL, ",", save), CDI_R5_TPS_POINTS - 1u, &b) &&
+        parse_int(strtok_r(NULL, ",", save), -300, 800, &signed_value) &&
+        a < p->staging.rpm_count && b < p->staging.tps_count) {
+        p->staging.advance_cdeg[b][a] = (int16_t)(signed_value * 10);
+        return make_frame(seq, "ACK,MAP_CELL", out, out_size);
+    }
+    if (!strcmp(op, "SAVE") &&
+        parse_uint(strtok_r(NULL, ",", save), CDI_R5_MAP_SLOTS - 1u, &a)) {
+        cdi_r5_status_t status;
+        p->staging.generation = (uint16_t)(p->working.generation + 1u);
+        status = cdi_r5_save_slot(p->store, (uint8_t)a, &p->staging,
+                                  p->rpm, p->hv_enabled, true);
+        if (status != CDI_R5_OK) return error_frame(seq, "MAP_INVALID", out, out_size);
+        if (p->persist != NULL && !p->persist(p->store, p->persist_context))
+            return error_frame(seq, "FLASH", out, out_size);
+        p->working = p->store->slots[a];
+        p->map_staging_active = false;
+        return make_frame(seq, "ACK,MAP_SAVED", out, out_size);
+    }
+    return error_frame(seq, "MAP", out, out_size);
+}
+
+static size_t handle_r9_set(cdi_r5_protocol_t *p, unsigned long seq, char **save,
+                            char *out, size_t out_size)
+{
+    const char *op = strtok_r(NULL, ",", save);
+    unsigned long a, b;
+    long x, y;
+    if (op == NULL || !setup_can_write(p))
+        return error_frame(seq, "STOP_ENGINE_WAIT_HV_LT30", out, out_size);
+    if (!strcmp(op, "LIMIT") &&
+        parse_uint(strtok_r(NULL, ",", save), CDI_R5_ABSOLUTE_RPM_CAP, &a) &&
+        a >= 500u && a >= p->store->setup.profile_rpm_min &&
+        a <= p->store->setup.profile_rpm_max) {
+        cdi_r5_map_t old = p->working;
+        p->working.rpm_limit = (uint16_t)a;
+        ++p->working.generation;
+        if (cdi_r5_map_validate(&p->working, true) != CDI_R5_OK ||
+            !persist_working(p)) {
+            p->working = old;
+            return error_frame(seq, "LIMIT_RANGE", out, out_size);
+        }
+        return make_frame(seq, "ACK,LIMIT", out, out_size);
+    }
+    if (!strcmp(op, "FAN")) {
+        const char *mode = strtok_r(NULL, ",", save);
+        cdi_r7_setup_t old = p->store->setup;
+        uint8_t fan_mode;
+        if (mode == NULL ||
+            !parse_int(strtok_r(NULL, ",", save), -400, 2000, &x) ||
+            !parse_int(strtok_r(NULL, ",", save), -400, 2000, &y) || y >= x)
+            return error_frame(seq, "FAN_RANGE", out, out_size);
+        if (!strcmp(mode, "OFF") || !strcmp(mode, "0")) fan_mode = CDI_R7_FAN_OFF;
+        else if (!strcmp(mode, "ON") || !strcmp(mode, "1")) fan_mode = CDI_R7_FAN_ON;
+        else if (!strcmp(mode, "AUTO") || !strcmp(mode, "2")) fan_mode = CDI_R7_FAN_AUTO;
+        else return error_frame(seq, "FAN_MODE", out, out_size);
+        p->store->setup.fan_mode = fan_mode;
+        p->store->setup.fan_on_cdeg = (uint16_t)(x * 10);
+        p->store->setup.fan_off_cdeg = (uint16_t)(y * 10);
+        if (!persist_store(p)) {
+            p->store->setup = old;
+            return error_frame(seq, "FLASH", out, out_size);
+        }
+        return make_frame(seq, "ACK,FAN", out, out_size);
+    }
+    if (!strcmp(op, "PROFILE")) {
+        const char *name = strtok_r(NULL, ",", save);
+        cdi_r7_setup_t old = p->store->setup;
+        unsigned long ppr, trigger_x10;
+        if (name == NULL || *name == '\0' || strlen(name) >= CDI_R5_NAME_LEN ||
+            !parse_uint(strtok_r(NULL, ",", save), CDI_R5_ABSOLUTE_RPM_CAP, &a) ||
+            !parse_uint(strtok_r(NULL, ",", save), CDI_R5_ABSOLUTE_RPM_CAP, &b) ||
+            !parse_int(strtok_r(NULL, ",", save), -300, 800, &x) ||
+            !parse_int(strtok_r(NULL, ",", save), -300, 800, &y) ||
+            !parse_uint(strtok_r(NULL, ",", save), CDI_R9_MAX_PPR, &ppr) ||
+            !parse_uint(strtok_r(NULL, ",", save), 3599u, &trigger_x10) ||
+            a < 100u || a >= b || x >= y || ppr < 1u)
+            return error_frame(seq, "PROFILE_RANGE", out, out_size);
+        memset(p->store->setup.profile_name, 0, CDI_R5_NAME_LEN);
+        strncpy(p->store->setup.profile_name, name, CDI_R5_NAME_LEN - 1u);
+        p->store->setup.profile_rpm_min = (uint16_t)a;
+        p->store->setup.profile_rpm_max = (uint16_t)b;
+        p->store->setup.profile_advance_min_cdeg = (int16_t)(x * 10);
+        p->store->setup.profile_advance_max_cdeg = (int16_t)(y * 10);
+        p->store->setup.pulses_per_revolution = (uint16_t)ppr;
+        p->store->setup.trigger_angle_cdeg = (uint16_t)(trigger_x10 * 10u);
+        p->setup_trigger_cdeg = p->store->setup.trigger_angle_cdeg;
+        if (cdi_r7_setup_validate(&p->store->setup) != CDI_R5_OK ||
+            !persist_store(p)) {
+            p->store->setup = old;
+            p->setup_trigger_cdeg = old.trigger_angle_cdeg;
+            return error_frame(seq, "PROFILE_RANGE", out, out_size);
+        }
+        return make_frame(seq, "ACK,PROFILE", out, out_size);
+    }
+    return error_frame(seq, "SET", out, out_size);
+}
+
+static size_t handle_r9_temp(cdi_r5_protocol_t *p, unsigned long seq, char **save,
+                             char *out, size_t out_size)
+{
+    const char *op = strtok_r(NULL, ",", save);
+    cdi_r7_setup_t old;
+    unsigned long adc[3];
+    long temperature_x10[3];
+    unsigned i;
+    if (op == NULL || strcmp(op, "CAL") || !setup_can_write(p))
+        return error_frame(seq, "TEMP_CAL", out, out_size);
+    for (i = 0u; i < 3u; ++i) {
+        if (!parse_uint(strtok_r(NULL, ",", save), 65535u, &adc[i]) ||
+            !parse_int(strtok_r(NULL, ",", save), -400, 2000, &temperature_x10[i]))
+            return error_frame(seq, "TEMP_CAL_RANGE", out, out_size);
+    }
+    old = p->store->setup;
+    for (i = 0u; i < 3u; ++i) {
+        p->store->setup.temp_adc[i] = (uint16_t)adc[i];
+        p->store->setup.temp_cdeg[i] = (int16_t)(temperature_x10[i] * 10);
+    }
+    if (cdi_r7_setup_validate(&p->store->setup) != CDI_R5_OK ||
+        !persist_store(p)) {
+        p->store->setup = old;
+        return error_frame(seq, "TEMP_CAL_RANGE", out, out_size);
+    }
+    return make_frame(seq, "ACK,TEMP_CAL", out, out_size);
+}
+
+static size_t handle_r9_dyno(cdi_r5_protocol_t *p, unsigned long seq, char **save,
+                             char *out, size_t out_size)
+{
+    const char *op = strtok_r(NULL, ",", save);
+    long trim_x10;
+    if (op == NULL) return error_frame(seq, "DYNO", out, out_size);
+    if (!strcmp(op, "BEGIN")) {
+        if (!setup_can_write(p)) return error_frame(seq, "STOP_ENGINE_WAIT_HV_LT30", out, out_size);
+        p->dyno_backup = p->working;
+        p->live_trim_cdeg = 0;
+        p->dyno_active = true;
+        return make_frame(seq, "ACK,DYNO_BEGIN", out, out_size);
+    }
+    if (!p->dyno_active) return error_frame(seq, "DYNO_BEGIN_FIRST", out, out_size);
+    if (!strcmp(op, "TRIM") &&
+        parse_int(strtok_r(NULL, ",", save), -200, 200, &trim_x10)) {
+        p->live_trim_cdeg = (int16_t)(trim_x10 * 10);
+        return make_frame(seq, "ACK,DYNO_TRIM", out, out_size);
+    }
+    if (!strcmp(op, "ABORT")) {
+        p->working = p->dyno_backup;
+        p->live_trim_cdeg = 0;
+        p->dyno_active = false;
+        return make_frame(seq, "ACK,DYNO_ABORT", out, out_size);
+    }
+    if (!strcmp(op, "COMMIT")) {
+        uint8_t r, t;
+        cdi_r5_map_t old;
+        if (!setup_can_write(p))
+            return error_frame(seq, "STOP_ENGINE_WAIT_HV_LT30", out, out_size);
+        old = p->working;
+        for (t = 0u; t < p->working.tps_count; ++t) {
+            for (r = 0u; r < p->working.rpm_count; ++r) {
+                int32_t v = (int32_t)p->working.advance_cdeg[t][r] +
+                            p->live_trim_cdeg;
+                if (v < p->store->setup.profile_advance_min_cdeg)
+                    v = p->store->setup.profile_advance_min_cdeg;
+                if (v > p->store->setup.profile_advance_max_cdeg)
+                    v = p->store->setup.profile_advance_max_cdeg;
+                p->working.advance_cdeg[t][r] = (int16_t)v;
+            }
+        }
+        ++p->working.generation;
+        if (cdi_r5_map_validate(&p->working, true) != CDI_R5_OK ||
+            !persist_working(p)) {
+            p->working = old;
+            return error_frame(seq, "DYNO_COMMIT", out, out_size);
+        }
+        p->live_trim_cdeg = 0;
+        p->dyno_active = false;
+        return make_frame(seq, "ACK,DYNO_COMMIT", out, out_size);
+    }
+    return error_frame(seq, "DYNO", out, out_size);
+}
+
 size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                               char *response, size_t response_size)
 {
@@ -326,8 +574,7 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
     if (cmd == NULL) return error_frame(seq, "COMMAND", response, response_size);
 
     if (strcmp(cmd, "PING") == 0)
-        /* Legacy token is intentionally stable; GET,CAPS reports R8. */
-        return make_frame(seq, "ACK,PONG_R7_2", response, response_size);
+        return make_frame(seq, "ACK,PONG_R9", response, response_size);
 
     if (strcmp(cmd, "GET") == 0) {
         char body[220];
@@ -352,7 +599,19 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->tps_closed_adc,s->tps_open_adc,s->first_start_hv_volts,s->center_enabled,s->side_enabled,s->fan_mode,p->pickup_quality);
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
-                "CAPS,R8.0,PROTO4,OEM_LEARN,MANUAL,OTA_STAGE,AUTO_FIRST_START,NO_JUMPERS");
+                "CAPS,5,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START");
+        } else if (what != NULL && strcmp(what, "PROFILE") == 0) {
+            const cdi_r7_setup_t *s=&p->store->setup;
+            n=snprintf(body,sizeof(body),"PROFILE,%s,%u,%u,%d,%d,%u,%u",
+                s->profile_name,s->profile_rpm_min,s->profile_rpm_max,
+                s->profile_advance_min_cdeg/10,s->profile_advance_max_cdeg/10,
+                s->pulses_per_revolution,s->trigger_angle_cdeg/10u);
+        } else if (what != NULL && strcmp(what, "TEMP") == 0) {
+            const cdi_r7_setup_t *s=&p->store->setup;
+            n=snprintf(body,sizeof(body),"TEMP,%u,%u,%u,%d,%u,%u",
+                s->fan_mode,s->fan_on_cdeg/10u,s->fan_off_cdeg/10u,
+                p->temperature_valid?p->temperature_cdeg/10:-32768,
+                p->temperature_valid?1u:0u,p->fan_output?1u:0u);
         } else if (what != NULL && strcmp(what, "MODE") == 0) {
             const cdi_r7_setup_t *s=&p->store->setup;
             n=snprintf(body,sizeof(body),"MODE,%u,%u,%u,%u",
@@ -372,8 +631,8 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 p->ota->state,(unsigned long)p->ota->received,
                 (unsigned long)p->ota->expected_length,p->ota->error_code);
         } else if (what != NULL && strcmp(what, "CELL") == 0 &&
-                   parse_uint(strtok_r(NULL, ",", &save), 7u, &a) &&
-                   parse_uint(strtok_r(NULL, ",", &save), 15u, &b) &&
+                   parse_uint(strtok_r(NULL, ",", &save), CDI_R5_TPS_POINTS - 1u, &a) &&
+                   parse_uint(strtok_r(NULL, ",", &save), CDI_R5_RPM_POINTS - 1u, &b) &&
                    a < p->working.tps_count && b < p->working.rpm_count) {
             n = snprintf(body, sizeof(body), "CELL,%lu,%lu,%d",
                 a, b, p->working.advance_cdeg[a][b]);
@@ -382,6 +641,31 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                make_frame(seq, body, response, response_size) : 0u;
     }
 
+    if (strcmp(cmd,"MAP")==0) {
+        const char *op = save;
+        if (op != NULL && !strncmp(op, "SELECT,", 7)) {
+            unsigned long slot;
+            char *select_save = op;
+            (void)strtok_r(NULL, ",", &select_save);
+            if (!setup_can_write(p) ||
+                !parse_uint(strtok_r(NULL, ",", &select_save), CDI_R5_MAP_SLOTS - 1u, &slot))
+                return error_frame(seq, "MAP_SELECT", response, response_size);
+            {
+                uint8_t old_slot = p->store->active_slot;
+                p->store->active_slot = (uint8_t)slot;
+                if (!persist_store(p)) {
+                    p->store->active_slot = old_slot;
+                    return error_frame(seq, "FLASH", response, response_size);
+                }
+                p->working = p->store->slots[slot];
+            }
+            return make_frame(seq, "ACK,MAP_SELECTED", response, response_size);
+        }
+        return handle_r9_map(p,seq,&save,response,response_size);
+    }
+    if (strcmp(cmd,"SET")==0) return handle_r9_set(p,seq,&save,response,response_size);
+    if (strcmp(cmd,"TEMP")==0) return handle_r9_temp(p,seq,&save,response,response_size);
+    if (strcmp(cmd,"DYNO")==0) return handle_r9_dyno(p,seq,&save,response,response_size);
     if (strcmp(cmd,"SETUP")==0) return handle_setup(p,seq,&save,response,response_size);
     if (strcmp(cmd,"MODE")==0) return handle_mode(p,seq,&save,response,response_size);
     if (strcmp(cmd,"LEARN")==0) return handle_learn(p,seq,&save,response,response_size);
@@ -425,9 +709,9 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
     }
 
     if (strcmp(cmd, "LIVE") == 0 &&
-        parse_uint(strtok_r(NULL, ",", &save), 7u, &a) &&
-        parse_uint(strtok_r(NULL, ",", &save), 15u, &b) &&
-        parse_uint(strtok_r(NULL, ",", &save), 4000u, &c)) {
+        parse_uint(strtok_r(NULL, ",", &save), CDI_R5_TPS_POINTS - 1u, &a) &&
+        parse_uint(strtok_r(NULL, ",", &save), CDI_R5_RPM_POINTS - 1u, &b) &&
+        parse_uint(strtok_r(NULL, ",", &save), CDI_R9_ADVANCE_MAX_CDEG, &c)) {
         cdi_r5_status_t s = cdi_r5_live_set_cell(&p->working, (uint8_t)a,
             (uint8_t)b, (int16_t)c, p->rpm != 0u, p->pro_enabled);
         return s == CDI_R5_OK ? make_frame(seq, "ACK,LIVE", response, response_size) :
@@ -440,7 +724,7 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
         cdi_r5_map_t candidate = p->working;
         if (p->rpm != 0u || p->hv_enabled)
             return error_frame(seq, "ENGINE_OR_HV", response, response_size);
-        if (kind == NULL || !parse_uint(strtok_r(NULL, ",", &save), 11500u, &a) ||
+        if (kind == NULL || !parse_uint(strtok_r(NULL, ",", &save), CDI_R5_ABSOLUTE_RPM_CAP, &a) ||
             !parse_uint(strtok_r(NULL, ",", &save), 1000u, &b))
             return error_frame(seq, "LIMIT", response, response_size);
         candidate.limiter_type = strcmp(kind, "HARD") == 0 ? CDI_R5_LIMITER_HARD :
