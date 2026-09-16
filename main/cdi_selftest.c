@@ -1,6 +1,3 @@
-/*
- * cdi_selftest.c — lihat cdi_selftest.h untuk penjelasan & cara pasang.
- */
 #include "cdi_selftest.h"
 #include "cdi_timebase.h"
 #include "driver/gpio.h"
@@ -11,8 +8,6 @@
 #include <stdbool.h>
 #include <inttypes.h>
 
-/* GPIO bebas, tidak dipakai fungsi lain di cdi_board_esp32.h. Ganti kalau
- * pin ini kebetulan bentrok dengan modifikasi board kamu sendiri. */
 #define CDI_PIN_SELFTEST_LOOPBACK GPIO_NUM_5
 
 static const char *TAG = "cdi_selftest";
@@ -38,7 +33,7 @@ static void IRAM_ATTR loopback_isr(void *arg)
     if (!s_have_due) return;
     uint64_t now = cdi_timebase_now();
     int64_t err_us = (int64_t)now - (int64_t)s_last_due;
-    s_have_due = false; /* jangan hitung edge yang sama dua kali kalau ada bouncing kabel */
+    s_have_due = false;
 
     portENTER_CRITICAL_ISR(&s_lock);
     s_count++;
@@ -64,11 +59,12 @@ static void selftest_report_task(void *arg)
         portEXIT_CRITICAL(&s_lock);
 
         if (count == 0) {
-            ESP_LOGI(TAG, "belum ada pulsa loopback terdeteksi (cek kabel jumper & sinyal pickup)");
+            /* FIX: Pesan log diperjelas agar tidak salah pin */
+            ESP_LOGI(TAG, "Menunggu pulsa... Pastikan f-Generator GM328A masuk ke GPIO4 (Pickup) DAN jumper GPIO25->GPIO5 terpasang.");
             continue;
         }
         int64_t mean = sum / (int64_t)count;
-        int64_t spread = mx - mn; /* inilah angka JITTER yang dicari */
+        int64_t spread = mx - mn;
         ESP_LOGI(TAG, "n=%u  rata2=%" PRId64 "us  min=%" PRId64 "us  max=%" PRId64
                       "us  JITTER(spread)=%" PRId64 "us",
                  (unsigned)count, mean, mn, mx, spread);
@@ -79,7 +75,7 @@ void cdi_selftest_init(void)
 {
     esp_err_t err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_ERROR_CHECK(err); /* ESP_ERR_INVALID_STATE = sudah diinstal modul lain, itu aman */
+        ESP_ERROR_CHECK(err);
     }
 
     gpio_config_t cfg = {

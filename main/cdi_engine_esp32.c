@@ -7,8 +7,15 @@
 #include "cdi_r5_ble.h"
 #include "cdi_r8_oem_learn.h"
 #include "cdi_r8_ota.h"
-#include "cdi_selftest.h" /* uji jitter tanpa osiloskop, lihat INSTRUKSI.md -- aman ditinggal
-                             terpasang di produksi selama cdi_selftest_init() tidak dipanggil */
+#include "cdi_selftest.h"
+
+/* =========================================================================
+ * SAKELAR MODE UJI MEJA (BENCH TEST)
+ * Ubah angka di bawah ini menjadi 0 sebelum CDI dipasang ke motor sungguhan!
+ * 1 = Bypass sensor aki dan HV diaktifkan (Aman untuk di meja/USB)
+ * 0 = Mode Produksi/Motor (Semua sensor perlindungan diaktifkan)
+ * ========================================================================= */
+#define BENCH_TEST_MODE 1
 
 #include "driver/gpio.h"
 #include "esp_attr.h"
@@ -50,7 +57,7 @@ static uint8_t s_last_limiter_state;
 static uint16_t s_telemetry_sequence;
 static int64_t s_first_start_good_ms;
 static bool s_first_start_proof_written;
-static bool s_fan_on; /* status kipas hasil cdi_r9_fan_update(), untuk histeresis lintas-tick */
+static bool s_fan_on;
 
 #define NVS_NAMESPACE "cdi_r5"
 #define NVS_KEY_STORE "store"
@@ -183,7 +190,7 @@ static bool IRAM_ATTR center_slot_cb(void *ctx, uint64_t due, uint64_t *next)
 {
     (void)ctx;
     if (!s_center_high) {
-        cdi_selftest_mark_center_due(due); /* uji jitter, lihat cdi_selftest.h */
+        cdi_selftest_mark_center_due(due); /* uji jitter */
         gpio_set_level(CDI_PIN_GATE_CENTER, 1);
         s_center_high = true;
         *next = due + s_center_width;
@@ -228,6 +235,10 @@ static void IRAM_ATTR pickup_isr(void *arg)
     cdi_r5_decision_t d;
     uint64_t now = cdi_timebase_now();
     uint64_t period64 = s_last_pickup_tick ? now - s_last_pickup_tick : 0u;
+
+    /* FILTER NOISE: Abaikan sinyal palsu < 2000us untuk mencegah crash/WDT timeout */
+    if (s_last_pickup_tick != 0u && period64 < 2000u) return;
+
     uint32_t period = (uint32_t)period64;
 
     if (s_last_pickup_tick != 0u && period > 10000u && period < 3000000u) {
@@ -349,7 +360,12 @@ void cdi_engine_init(void)
     cdi_timebase_set_slot_handler(CDI_TB_SLOT_SIDE, side_slot_cb, NULL);
     cdi_timebase_set_slot_handler(CDI_TB_SLOT_STROBE, strobe_slot_cb, NULL);
 
-    ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3));
+    /* Filter error ISR already installed */
+    esp_err_t isr_err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
+    if (isr_err != ESP_OK && isr_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Gagal menginstal ISR service");
+    }
+
     gpio_set_intr_type(CDI_PIN_PICKUP_CENTER, GPIO_INTR_NEGEDGE);
     ESP_ERROR_CHECK(gpio_isr_handler_add(CDI_PIN_PICKUP_CENTER, pickup_isr, NULL));
     ESP_ERROR_CHECK(gpio_isr_handler_add(CDI_PIN_OEM_TAP_CENTER, oem_tap_isr,
@@ -369,6 +385,11 @@ void cdi_engine_tick_1ms(void)
     cdi_board_adc_sample_all();
     uint16_t battery_mv = cdi_r5_vbat_adc_to_mv(cdi_board_adc_raw(CDI_ADC_IDX_VBAT));
     bool battery_ok = battery_mv >= 9500u && battery_mv <= 16000u;
+    
+    #if BENCH_TEST_MODE
+    battery_ok = true; /* BYPASS TEGANGAN AKI */
+    #endif
+    
     s_battery_ok_state = battery_ok;
     bool fault_low = cdi_board_read_fault();
 
@@ -396,14 +417,16 @@ void cdi_engine_tick_1ms(void)
     if ((esp_timer_get_time() - s_last_pickup_us) > 500000) protocol.rpm = 0u;
     protocol.hv_center = cdi_r5_hv_adc_to_volts(cdi_board_adc_raw(CDI_ADC_IDX_HVC));
     protocol.hv_side = cdi_r5_hv_adc_to_volts(cdi_board_adc_raw(CDI_ADC_IDX_HVS));
+    
+    #if BENCH_TEST_MODE
+    protocol.hv_center = 0; /* BYPASS TEGANGAN HANTU HV */
+    protocol.hv_side = 0;
+    #endif
+    
     protocol.hv_enabled = charger.duty_permille != 0u || protocol.hv_center >= 30u || protocol.hv_side >= 30u;
 
     if (!engine.output_permission || fault_low || protocol.strobe_active) force_safe_full();
 
-    /* FIX: sebelumnya baris ini cuma cek fan_mode != OFF (ON dan AUTO
-     * diperlakukan sama), sehingga cdi_r9_temperature_from_adc()/
-     * cdi_r9_fan_update() tidak pernah terpanggil dan histeresis+fail-safe
-     * NTC mati total. adc[CDI_ADC_IDX_TEMP] -> suhu -> keputusan fan -> relay. */
     int16_t temperature_cdeg = 0;
     bool temperature_valid = cdi_r9_temperature_from_adc(&store.setup,
         cdi_board_adc_raw(CDI_ADC_IDX_TEMP), &temperature_cdeg);
@@ -437,7 +460,8 @@ void cdi_engine_tick_1ms(void)
         engine.output_permission, engine.output_permission && !protocol.strobe_active, fault_low);
     cdi_board_charger_set_duty_permille(charger.duty_permille);
 
-    if (++telemetry_divider >= 5u) {
+    /* FIX: Sinkronisasi data Bluetooth disetel ke 50u (20Hz) untuk cegah Lag Android */
+    if (++telemetry_divider >= 50u) {
         telemetry_divider = 0u;
         cdi_r5_ble_telemetry_t t = {0};
         uint8_t packet[CDI_R5_BLE_TELEMETRY_SIZE];

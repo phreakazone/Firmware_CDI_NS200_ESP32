@@ -6,5 +6,8 @@
     "--background-index",
     "--query-driver=**",
     "--compile-commands-dir=i:\\DEV\\CDI\\Firmware_CDI_NS200_ESP32\\build"
-  ]
+  ],
+  "idf.portWin": "COM4",
+  "idf.monitorPort": "COM4",
+  "idf.flashType": "UART"
 }
