@@ -27,21 +27,47 @@ ditulis ulang. Status per modul:
 | **Brownout detector** | **Bug ditemukan & diperbaiki** | Versi sebelumnya salah level, sekarang sudah benar (Level 0) dan terverifikasi lewat isi `sdkconfig`. |
 | **Self-test jitter** (`cdi_selftest.c`) | **Aktif & terintegrasi penuh** | Sudah dipakai di atas meja, melaporkan *jitter* yang stabil saat diuji dengan simulator frekuensi. |
 
-## 1. Peta Pin (ESP32-WROOM-32 DevKit)
+## 1. Peta Pin Lengkap (ESP32-WROOM-32 DevKit)
 
-    [Jalur Input Pulser]
-    PA0 (GPIO4)  -> Pickup Utama (dari J1.10)
+Sistem ini membagi pin menjadi beberapa kategori fungsional. Pastikan pengkabelan di PCB/Hardware Anda sesuai dengan tabel di bawah ini:
 
-    [Jalur Output DIY - Menuju Koil]
-    PA1 (GPIO25) -> Gate Center / Koil Tengah (menuju J1.12 via SCR)
-    PA2 (GPIO26) -> Gate Side / Koil Samping (menuju J1.6 via SCR)
+### A. Sinyal Input & Sensor Digital
+| Fungsi | Pin ESP32 | Pin STM32 Asli | Keterangan |
+|---|---|---|---|
+| **Pickup Utama** | **GPIO4** (D4) | PA0 | Sensor Pulser. (Batas aman 3.3V, wajib lewat rangkaian *conditioner*) |
+| **OEM Tap Center** | **GPIO16** (RX2) | PB3 | Sadapan Koil Tengah untuk Mode OEM Learn (Wajib via Optocoupler) |
+| **OEM Tap Side** | **GPIO17** (TX2) | PB4 | Sadapan Koil Samping untuk Mode OEM Learn (Wajib via Optocoupler) |
+| **Hardware Fault** | **GPIO14** (D14) | - | Input pengaman Aktif-Low (Biasanya terhubung ke sirkuit HV *overvoltage*) |
 
-    [Jalur Input LEARN - Sadapan OEM via Isolator PC817]
-    PB3 (GPIO16) -> OEM Tap Center (sadapan paralel dari J1.12)
-    PB4 (GPIO17) -> OEM Tap Side (sadapan paralel dari J1.6)
+### B. Keluaran Daya & Pengapian (Output)
+| Fungsi | Pin ESP32 | Pin STM32 Asli | Keterangan |
+|---|---|---|---|
+| **Gate Center** | **GPIO25** (D25) | PA1 | Pemicu SCR/IGBT Koil Tengah |
+| **Gate Side** | **GPIO26** (D26) | PA2 | Pemicu SCR/IGBT Koil Samping |
+| **Charger A** | **GPIO18** (D18) | - | Output PWM Push-Pull A (Untuk trafo inverter DC-DC CDI) |
+| **Charger B** | **GPIO19** (D19) | - | Output PWM Push-Pull B (Komplemen dengan *Dead-time*) |
+| **Fan Relay** | **GPIO13** (D13) | PB5 | Output kontrol Relay Kipas Radiator (Aktif jika suhu mesin panas) |
+| **Strobo** | **GPIO27** (D27) | PB9 | Output Lampu Strobe (Untuk *Timing Light* manual) |
 
-    [Uji Bangku SAJA - Tidak dipakai di operasi normal]
-    Loopback self-test (GPIO5) -> Jumper dari GPIO25 untuk deteksi Jitter.
+### C. Sensor Analog (Wajib di ADC1)
+*Catatan: Semua sensor analog menggunakan modul ADC1 ESP32 agar dapat bekerja bersamaan dengan transmisi Bluetooth secara stabil.*
+
+| Fungsi | Pin ESP32 | Channel | Keterangan |
+|---|---|---|---|
+| **TPS Input** | **GPIO36** (VP) | ADC1_CH0 | Sensor Posisi Gas (Throttle Position Sensor) |
+| **Temp Input** | **GPIO39** (VN) | ADC1_CH3 | Sensor Suhu NTC (*Engine Temperature*) |
+| **TPS Reference** | **GPIO34** (D34) | ADC1_CH6 | Tegangan Referensi TPS |
+| **HV Center** | **GPIO35** (D35) | ADC1_CH7 | Pantauan Tegangan Tinggi (HV) Kapasitor Tengah |
+| **HV Side** | **GPIO32** (D32) | ADC1_CH4 | Pantauan Tegangan Tinggi (HV) Kapasitor Samping |
+| **VBAT Input** | **GPIO33** (D33) | ADC1_CH5 | Pantauan Tegangan Aki/Baterai 12V |
+
+### D. Pin Khusus Uji Meja (Bench Test)
+| Fungsi | Pin ESP32 | Keterangan |
+|---|---|---|
+| **Loopback Test** | **GPIO5** (D5) | Hanya dipakai saat *Bench Test*. Dijumper langsung ke **GPIO25** untuk mengukur Jitter MCU tanpa Osiloskop. **(Lepas saat dipasang ke motor!)** |
+
+**⚠️ PERINGATAN KERAS KEAMANAN HARDWARE:**
+ESP32 adalah IC dengan toleransi logika murni **3.3V**. Jalur Pickup, OEM Tap, maupun input ADC **tidak boleh** disuapkan tegangan 12V dari aki atau ratusan volt dari koil secara langsung. Semuanya harus melewati sirkuit *optocoupler* (isolator) atau resistor pembagi tegangan (*voltage divider*) yang dihitung secara presisi. Kesalahan pada batas 3.3V akan langsung menyebabkan *chip* ESP32 terbakar (*magic smoke*).
 
 **PERINGATAN KERAS:** ESP32 adalah IC 3.3V murni. Sinyal dari generator PWM eksternal (seperti GM328A) seringkali bertegangan 5V. **Selalu ukur amplitudo sebelum menyambung ke GPIO4.** Gunakan resistor pembagi tegangan (misal 1kΩ/1kΩ) untuk menurunkan tegangan 5V menjadi aman.
 
