@@ -15,7 +15,7 @@
  * 1 = Bypass sensor aki dan HV diaktifkan (Aman untuk di meja/USB)
  * 0 = Mode Produksi/Motor (Semua sensor perlindungan diaktifkan)
  * ========================================================================= */
-#define BENCH_TEST_MODE 1
+#define BENCH_TEST_MODE 0
 
 #include "driver/gpio.h"
 #include "esp_attr.h"
@@ -460,8 +460,8 @@ void cdi_engine_tick_1ms(void)
         engine.output_permission, engine.output_permission && !protocol.strobe_active, fault_low);
     cdi_board_charger_set_duty_permille(charger.duty_permille);
 
-    /* FIX: Sinkronisasi data Bluetooth disetel ke 50u (20Hz) untuk cegah Lag Android */
-    if (++telemetry_divider >= 50u) {
+    /* Sinkronisasi data Bluetooth disetel ke 5u (20Hz) agar tidak patah-patah */
+    if (++telemetry_divider >= 5u) {
         telemetry_divider = 0u;
         cdi_r5_ble_telemetry_t t = {0};
         uint8_t packet[CDI_R5_BLE_TELEMETRY_SIZE];

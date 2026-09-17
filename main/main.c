@@ -113,7 +113,7 @@ void app_main(void)
     cdi_board_charger_pwm_init();
     cdi_timebase_init();
     cdi_engine_init();
-    cdi_selftest_init();   /* HAPUS/comment baris ini untuk build produksi final di motor */
+    // cdi_selftest_init();   /* HAPUS/comment baris ini untuk build produksi final di motor */
     cdi_ble_init();
 
     uart_driver_install(UART_CONSOLE_NUM, UART_BUF_SIZE * 2, 0, 0, NULL, 0);

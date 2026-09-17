@@ -1,7 +1,7 @@
 {
     "version":            "1.3",
     "project_name":       "ns200_cdi_esp32",
-    "project_version":    "a311732-dirty",
+    "project_version":    "22c7be5-dirty",
     "project_path":       "I:/DEV/CDI/Firmware_CDI_NS200_ESP32",
     "idf_path":           "I:/esp/v6.1/esp-idf",
     "build_dir":          "I:/DEV/CDI/Firmware_CDI_NS200_ESP32/build",

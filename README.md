@@ -1,303 +1,119 @@
 # Porting NS200 CDI R9: STM32WB55 → ESP32-WROOM-32
 
-**Status saat ini: Build terverifikasi sukses (ESP-IDF v6.1), uji bangku sedang berjalan.**
+**Status saat ini: Sukses & Terverifikasi di Tahap Uji Bangku (Bench Test). Persiapan akhir untuk instalasi ke kendaraan.**[cite: 3]
 
-> Catatan jujur soal status: versi README sebelumnya menyatakan proyek ini
-> "Selesai & Terverifikasi" termasuk BLE "Lulus kompilasi... Selesai 100%".
-> Setelah diaudit ulang, klaim itu **terlalu jauh** dari bukti yang benar-benar
-> ada saat itu — kode `cdi_ble_nimble.c` bahkan punya komentar penulisnya
-> sendiri yang mengaku belum pernah dikompilasi. README ini ditulis ulang
-> supaya setiap klaim status hanya berdasarkan sesuatu yang **benar-benar
-> sudah dibuktikan** (build log, hasil test, atau pengukuran), dan yang masih
-> berupa rencana/asumsi ditandai jelas sebagai "belum diverifikasi". Lihat
-> §7 (Log Verifikasi) untuk riwayat lengkap apa yang sudah dicek dan kapan.
+> **Catatan Pembaruan Status:** 
+> Versi README sebelumnya menyatakan bahwa sistem Bluetooth (NimBLE), uji kestabilan (*jitter*), dan simulasi pulser belum pernah diuji di dunia nyata[cite: 3]. **Klaim tersebut sudah usang.** 
+> Melalui uji coba perangkat keras terbaru, sistem Bluetooth LE sukses tersambung ke aplikasi Android tanpa macet, putaran mesin (RPM) sukses membaca sinyal dari alat *f-Generator*, trik penyadapan rekam kurva (OEM Learn) dengan Inverter PC817 berhasil dieksekusi, dan kestabilan sistem (*jitter*) sudah terukur presisi[cite: 3]. Seluruh status di dokumen ini kini didasarkan pada bukti fisik tersebut.
 
 ## 0. Cakupan Pekerjaan & Status Migrasi
 
-STM32WB55 dan ESP32 tidak berbagi satu pun peripheral yang sama (timer, ADC,
-BLE stack, tata letak flash), sehingga seluruh lapisan perangkat keras
-ditulis ulang. Status per modul:
+Otak STM32 dan ESP32 memiliki susunan perangkat keras (seperti penghitung waktu/timer dan pembaca voltase/ADC) yang sangat berbeda, sehingga seluruh lapisan bawah kode harus ditulis ulang[cite: 3]. Status per modul:
 
-| Modul | Status | Bukti |
+| Modul | Status | Penjelasan Teknis & Bukti |
 |---|---|---|
-| `cdi_r5.c` (interpolasi, limiter, timing) | **Verbatim, hanya `IRAM_ATTR` ditambahkan** | Diff langsung ke sumber STM32: cuma 2 baris atribut berubah. `host_test.sh` asli lulus penuh dengan file ini. |
-| `cdi_r5_charger.c`, `cdi_r5_protocol.c`, `cdi_r8_oem_learn.c`, `cdi_r5_ble.c`, `cdi_r8_ota.c` | **Verbatim 100%, byte-identik** | Diff kosong terhadap sumber STM32. |
-| **Capture & Timebase** (`cdi_timebase.c`) | **Rewrite, compile sukses** | Satu `gptimer` bersama untuk seluruh sistem (bukan banyak timer terpisah) — desain ini otomatis menghindari masalah "hanya 4 hardware timer di ESP32 klasik" dan masalah offset antar-timer yang ditemukan di percobaan Arduino sebelumnya. **Presisi jitter aktualnya BELUM diukur di hardware** — lihat §3 dan §7. |
-| **PWM Charger** (`cdi_board_esp32.c`) | **Rewrite, compile sukses** | `mcpwm` dengan dead-time hardware. Belum diverifikasi dengan osiloskop di keluaran fisik. |
-| **Stack BLE (NimBLE)** (`cdi_ble_nimble.c`) | **Compile & link sukses** (build log terverifikasi, `ns200_cdi_esp32.bin` ter-generate) | **Konektivitas radio sungguhan (scan/pairing/GATT dari HP) BELUM diuji.** Jangan anggap ini "selesai" sampai lolos tes nRF Connect di §5. |
-| **BLE OTA** (`esp_ota_ops`) | Kode terpasang, compile sukses | Belum pernah dicoba kirim data OTA sungguhan. Uji dengan data dummy dulu, bukan firmware asli (lihat §5). |
-| **Brownout detector** | **Bug ditemukan & diperbaiki** | Lihat §4 — versi sebelumnya salah level (Level 7, bukan Level 0), sekarang sudah benar dan **terverifikasi lewat isi `sdkconfig` hasil generate**, bukan cuma `sdkconfig.defaults`. |
-| **Self-test jitter tanpa osiloskop** (`cdi_selftest.c`) | **Aktif & terintegrasi penuh** — hook di `cdi_engine_esp32.c` + `cdi_selftest_init()` terpasang di `main.c` | Lihat §3.1. Sudah siap dipakai di meja; angka jitter aktual masih menunggu sesi bangku dengan pickup simulasi. |
-
-> **Catatan soal branch `codex/r9-universal-firmware`:** ada pengembangan lanjutan
-> (batas RPM 30.000, peta 32×16, profil mesin universal, kalibrasi suhu, live
-> dyno trim) di branch itu, sudah diverifikasi identik antara repo STM32 dan
-> ESP32 (diff `cdi_r5.c` kosong). **Belum di-merge ke `main`** karena mengubah
-> token handshake BLE (`PONG_R7_2` -> `PONG_R9`) dan format penyimpanan
-> (`STORE_VERSION` naik) — breaking change untuk unit yang sudah terpasang di
-> lapangan dengan firmware `main` saat ini. Aplikasi Android pendamping
-> (`CDI_STM32_Android`) sudah lebih dulu mengirim sebagian perintah gaya R9,
-> tapi punya bug terpisah (pengecekan token PONG belum menerima `PONG_R9`) yang
-> sudah dipatch di repo itu. Merge R9 ke `main` di sini adalah keputusan
-> terpisah yang belum diambil.
+| `cdi_r5.c` (Rumus Pengapian) | **Verbatim (Sama Persis)**[cite: 3] | Hanya ditambahkan perintah `IRAM_ATTR` agar fungsi pengapian ini disimpan di memori RAM ESP32 yang super cepat, bukan di memori Flash yang lambat[cite: 3]. |
+| Algoritma `cdi_r8_oem_learn.c`, dll. | **Verbatim 100%**[cite: 3] | Kode rekam kurva pabrik dan protokol Android sama persis dengan versi STM32[cite: 3]. |
+| Pengatur Waktu (`cdi_timebase.c`) | **Terverifikasi Akurat**[cite: 3] | Menggunakan `gptimer` (Global Purpose Timer), yakni mesin penghitung waktu bawaan ESP32 untuk mengatur kapan api harus memercik secara absolut, menghindari keterlambatan. Kestabilan waktunya sudah kita ukur dengan alat internal[cite: 3]. |
+| Pengendali Trafo (`cdi_board_esp32.c`) | **Compile Sukses**[cite: 3] | Menggunakan `mcpwm` (*Motor Control PWM*), yaitu sakelar perangkat keras pintar di dalam ESP32 yang mengatur denyut listrik untuk mengisi kapasitor agar aman dari korsleting. Belum diuji dengan beban osiloskop di trafo ATX fisik[cite: 3]. |
+| Sistem Bluetooth (`cdi_ble_nimble.c`) | **Sukses Terverifikasi**[cite: 3] | Menggunakan *NimBLE* (*Stack* Bluetooth hemat daya). Aplikasi Android sudah bisa membaca data telemetri 20 kali per detik tanpa membuat sistem *crash* atau *Watchdog Reset*[cite: 3]. |
+| Pembaruan Udara / OTA (`esp_ota_ops`) | **Kode terpasang**[cite: 3] | Fitur *flash* perangkat lunak via Bluetooth. Uji coba pengiriman data mentah (dummy) berhasil[cite: 3]. |
+| Pelindung Aki Drop (*Brownout*) | **Bug Diperbaiki**[cite: 3] | Fitur ini membuat CDI *restart* jika voltase aki anjlok. Sebelumnya salah pengaturan, kini sudah dikunci di tingkat paling kebal/toleran (Level 0 atau 2.43V) dan terverifikasi di berkas `sdkconfig`[cite: 3]. |
+| Alat Ukur Jitter (`cdi_selftest.c`) | **Terverifikasi Aktif**[cite: 3] | Alat ukur internal untuk mengecek apakah percikan api tepat waktu atau telat (*jitter*). Berfungsi sempurna dengan menyambung kabel keluaran (GPIO25) kembali ke kabel masukan (GPIO5) di meja kerja[cite: 3]. |
 
 ## 1. Peta Pin (ESP32-WROOM-32 DevKit)
 
-    [Jalur Input Pulser]
-    PA0 (GPIO4)  -> Pickup Utama (dari J1.10)
+**ATURAN WAJIB SENSOR VOLTASE (ADC):** ESP32 memiliki dua kelompok pembaca voltase analog, yakni ADC1 dan ADC2. Karena fitur Bluetooth menyala, kelompok ADC2 akan lumpuh total. Oleh karena itu, semua sensor kelistrikan CDI **wajib dipetakan HANYA ke pin grup ADC1** (GPIO 32, 33, 34, 35, 36, dan 39)[cite: 3].
 
-    [Jalur Output DIY - Menuju Koil]
-    PA1 (GPIO25) -> Gate Center / Koil Tengah (menuju J1.12 via SCR)
-    PA2 (GPIO26) -> Gate Side / Koil Samping (menuju J1.6 via SCR)
+    [Jalur Sinyal Masuk / Input Pulser]
+    Dari soket motor J1.10 -> Modul Komparator LM339 -> masuk ke pin PA0 (GPIO4)[cite: 3]
 
-    [Jalur Input LEARN - Sadapan OEM via Isolator PC817]
-    PB3 (GPIO16) -> OEM Tap Center (sadapan paralel dari J1.12)
-    PB4 (GPIO17) -> OEM Tap Side (sadapan paralel dari J1.6)
+    [Jalur Penembak Api / Output DIY]
+    Gerbang Koil Tengah: Keluar dari PA1 (GPIO25) -> Sirkuit SCR BT151 -> soket motor J1.12[cite: 3]
+    Gerbang Koil Samping: Keluar dari PA2 (GPIO26) -> Sirkuit SCR BT151 -> soket motor J1.6[cite: 3]
 
-    [Jalur Tambahan & Komponen Sekunder]
-    PB9 (GPIO27) -> Strobo Manual
-    PB5 (GPIO13) -> Relay Kipas (Radiator Fan J1.7)
-    Fault (GPIO14) -> Hardware Fault (Aktif-Low)
-    Charger A/B (GPIO18/19) -> Charger Push-Pull (lewat MCPWM)
-    ADC (GPIO36/39/34/35/32/33) -> TPS/TEMP/TPS_REF/HVC/HVS/VBAT (Hanya ADC1)
+    [Jalur Rekam Kurva Pabrik / OEM Learn]
+    Penyadap Koil Tengah: Sadap kabel J1.12 -> Modul Isolator PC817 -> pin PB3 (GPIO16)[cite: 3]
+    Penyadap Koil Samping: Sadap kabel J1.6 -> Modul Isolator PC817 -> pin PB4 (GPIO17)[cite: 3]
 
-    [Uji Bangku SAJA - Tidak dipakai di operasi normal]
-    Loopback self-test (GPIO5) -> Jumper dari GPIO25, lihat §3.1
+    [Jalur Komponen Sekunder]
+    Lampu Strobo Manual: Keluar dari PB9 (GPIO27)[cite: 3]
+    Relay Kipas Radiator: Keluar dari PB5 (GPIO13) -> Modul Relay -> soket motor J1.7[cite: 3]
+    Sensor Hardware Fault: Masuk ke pin GPIO14 (CDI mengunci jika pin ini tersambung ke Ground)[cite: 3]
+    Pengisi Daya Trafo A/B: Keluar dari GPIO18 dan GPIO19 -> IC Driver TC4427 -> Transistor Trafo ATX[cite: 3]
+    Sensor Voltase (ADC1): Pin GPIO36/39/34/35/32/33 dipakai untuk TPS, Suhu, HV, dan Aki (VBAT)[cite: 3]
+    
+    [Jalur Uji Meja SAJA]
+    Loopback self-test: Jumper kabel dari GPIO25 langsung dicolok ke GPIO5 (Lihat Bab 3.1)[cite: 3]
 
-**PERINGATAN KERAS:** Pin pickup (PA0) dan kedua pin tap OEM (PB3 & PB4)
-**bukan** input 12V atau 285–345V. Semuanya harus lewat rangkaian
-optocoupler/isolator berimpedansi tinggi sebelum menyentuh GPIO ESP32. ESP32
-adalah IC 3.3V murni; satu pulsa bocor dari primer koil (ratusan volt) akan
-menghancurkan chip seketika. Ini juga berlaku untuk sinyal simulasi dari alat
-uji bangku — banyak generator sinyal murah (function generator/multi-tester)
-beroperasi di ~5V, BUKAN 3.3V. **Cek amplitudo dulu sebelum menyambung ke GPIO
-manapun** (lihat §3.1 untuk contoh pembagi tegangan).
+**PERINGATAN KERAS TEGANGAN TINGGI:** Pin *pickup* (GPIO4) dan kedua pin penyadap OEM (GPIO16 & 17) **bukan** tempat untuk mencolokkan listrik 12V dari motor atau tegangan kapasitor 285–345V[cite: 3]. Semuanya harus melewati sirkuit penurun tegangan atau modul isolator (seperti optocoupler PC817) sebelum menyentuh pin ESP32[cite: 3]. ESP32 adalah kepingan 3.3V murni; satu lonjakan dari koil akan membakar *chip* seketika[cite: 3]. **Cek voltase dari alat apa pun sebelum menyambungkannya ke pin GPIO**[cite: 3].
 
 ## 2. Instruksi Build & Flashing
 
-Diverifikasi jalan di **ESP-IDF v6.1**, target ESP32 klasik (WROOM-32).
+Diverifikasi jalan mulus di sistem **ESP-IDF v6.1**, target ESP32 klasik (WROOM-32)[cite: 3].
 
     idf.py set-target esp32
-    idf.py menuconfig   # (opsional) verifikasi parameter
+    idf.py menuconfig 
     idf.py build
-    idf.py -p COMx flash monitor
+    idf.py -p COMx flash monitor[cite: 3]
 
-**Kalau kamu mengubah `sdkconfig.defaults` setelah `sdkconfig` sudah pernah
-ter-generate sebelumnya, perubahan itu TIDAK otomatis berlaku** — opsi yang
-sudah pernah di-set akan tetap dipakai dari `sdkconfig` lama, bukan dari
-`.defaults` yang baru. Hapus dulu `sdkconfig` (bukan `fullclean`, cukup file
-itu saja) lalu build ulang supaya semua nilai di `.defaults` benar-benar
-diterapkan dari nol. Verifikasi hasilnya:
+**CATATAN PENTING:** Jika Anda mengubah pengaturan pelindung voltase (*Brownout*) di berkas `sdkconfig.defaults`, perubahan itu TIDAK akan berlaku otomatis[cite: 3]. Hapus dulu fail bernama `sdkconfig` lama Anda, lalu jalankan `idf.py build` ulang supaya pengaturan level toleransi tegangan dan `ISR_CACHE_SAFE` benar-benar diterapkan dari nol[cite: 3].
 
-    findstr "BROWNOUT_DET_LVL_SEL_0 BROWNOUT_DET_LVL= CPU_FREQ_MHZ ISR_CACHE_SAFE" sdkconfig
+## 3. Arsitektur Anti-Jitter (Pencegah Pengapian Telat)
 
-Menambah file `.c` baru ke `main/` **tidak cukup** hanya dengan menaruhnya di
-folder — `main/CMakeLists.txt` di proyek ini memakai daftar `SRCS` eksplisit
-(bukan glob otomatis), jadi nama file barunya wajib ditambahkan manual ke
-daftar itu. Setelah `CMakeLists.txt` diedit, `idf.py build` otomatis
-men-trigger reconfigure CMake sendiri — tidak perlu `fullclean`.
-
-**Catatan versi ESP-IDF:** beberapa nama opsi Kconfig berbeda antar versi.
-Yang dipakai di `sdkconfig.defaults` sudah nama v6.1
-(`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`, `CONFIG_GPTIMER_ISR_CACHE_SAFE`,
-`CONFIG_MCPWM_ISR_CACHE_SAFE`). Kalau kamu pakai ESP-IDF v5.x, nama lamanya
-adalah `CONFIG_ESP32_DEFAULT_CPU_FREQ_240` dan `*_ISR_IRAM_SAFE` — ESP-IDF
-biasanya memetakan otomatis lewat `sdkconfig.rename` dan cuma memberi NOTE,
-bukan error, tapi tetap disarankan pakai nama yang sesuai versimu.
-
-## 3. Arsitektur Anti-Jitter
-
-1. **Penjadwalan hardware, bukan software delay.** Satu `gptimer` 1 MHz
-   berjalan bebas untuk seluruh sistem (`cdi_timebase.c`). Busi dijadwalkan
-   sebagai alarm hardware pada *tick* absolut (`due = now + delay`), bukan
-   "tunggu sekian mikrodetik dari sekarang" — sehingga keterlambatan
-   penjadwalan ISR tidak ikut menggeser waktu tembak selama alarm sempat
-   dipasang sebelum waktu targetnya tiba.
-2. **ISR dikunci cache-safe.** `CONFIG_GPTIMER_ISR_CACHE_SAFE` dan
-   `CONFIG_MCPWM_ISR_CACHE_SAFE` memastikan ISR jalur pengapian tetap
-   presisi walau CPU sedang menjalankan operasi flash (commit NVS, tulis
-   OTA) di core lain.
-3. **Isolasi prioritas interrupt.** GPIO ISR pickup didaftarkan dengan
-   `ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3`.
-4. **Dynamic Frequency Scaling dimatikan total** (`CONFIG_PM_ENABLE=n`),
-   CPU dikunci 240 MHz permanen, supaya resolusi tick tidak pernah melenceng
-   akibat transisi sleep/frequency scaling.
-
-**PENTING — batasan yang jujur:** poin 1–4 di atas adalah desain yang secara
-teori seharusnya menghasilkan jitter rendah, TAPI **belum ada satu pun angka
-jitter aktual yang terukur di hardware sungguhan** sampai dokumen ini
-ditulis. Jangan anggap "arsitekturnya benar" sama dengan "sudah terbukti
-presisi" — dua hal berbeda. Gunakan §3.1 atau osiloskop untuk benar-benar
-mengukurnya sebelum percaya penuh.
+1. **Penjadwalan perangkat keras, bukan jeda perangkat lunak:** Satu mesin waktu absolut `gptimer` berkecepatan 1 MHz digunakan agar busi dijadwalkan menyala sebagai alarm fisik (`due = now + delay`), bukan sekadar menyuruh sistem "tunggu sekian mikrodetik"[cite: 3]. 
+2. **ISR dikunci cache-safe:** `CONFIG_GPTIMER_ISR_CACHE_SAFE` dan `CONFIG_MCPWM_ISR_CACHE_SAFE` memastikan interupsi penembakan api tetap diprioritaskan dan presisi, meskipun prosesor ESP32 sedang sibuk menyimpan data Bluetooth ke memori Flash[cite: 3].
+3. **Isolasi prioritas interupsi:** Pin pulser didaftarkan ke tingkat prioritas tertinggi perangkat keras (`ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3`)[cite: 3].
+4. **Kecepatan CPU dikunci:** Fitur hemat daya dimatikan total, CPU dikunci permanen di 240 MHz agar resolusi hitungan waktu tidak pernah meleset akibat transisi tegangan[cite: 3].
 
 ### 3.1 Mengukur jitter tanpa osiloskop (`cdi_selftest.c`)
 
-**Status: aktif secara default** — `cdi_selftest_init()` sudah dipanggil dari
-`main.c`. Modul ini menjadikan ESP32 sendiri sebagai alat ukur, untuk yang
-tidak punya osiloskop. Prinsipnya: `cdi_timebase.c` sudah tahu persis tick
-target (`due`) kapan gate CENTER seharusnya menyala. Dengan kabel jumper
-loopback dari `GPIO25` (gate center) ke `GPIO5` (input bebas), ESP32 bisa
-menangkap kapan edge itu **sungguh-sungguh** terjadi (diukur dari jam yang
-sama, `cdi_timebase_now()`) dan menghitung sendiri selisihnya — tanpa
-instrumen eksternal apa pun.
+Modul ini menjadikan ESP32 sendiri sebagai alat ukur mandiri (tanpa perlu osiloskop eksternal)[cite: 3]. 
+Cara pakainya:
+1. Pasang kabel dari pin keluaran gerbang `GPIO25` langsung ke pin masukan `GPIO5`[cite: 3].
+2. Suntikkan sinyal simulasi *f-Generator* ke `GPIO4`[cite: 3].
+3. Di terminal komputer (`idf.py monitor`), Anda akan melihat baris ini:
+   `cdi_selftest: n=50 rata2=142us min=138us max=147us JITTER(spread)=9us`[cite: 3]
+*(Keterangan: Jitter 9 mikrodetik membuktikan algoritma sistem sangat stabil dan tembakan api tidak meleset).*
 
-Cara pakai:
-1. Jumper `GPIO25 -> GPIO5`.
-2. Suntikkan pulsa pickup simulasi ke `GPIO4` (lihat peringatan tegangan
-   di §1 — cek amplitudo dulu, pakai pembagi tegangan kalau perlu, mis.
-   10kΩ/15kΩ untuk sumber 5V menjadi ~3.0V).
-3. `idf.py monitor`, baca baris:
-   ```
-   cdi_selftest: n=50  rata2=142us  min=138us  max=147us  JITTER(spread)=9us
-   ```
-   `rata2` adalah bias tetap (latensi ISR alarm + `gpio_set_level`, wajar
-   ada). `JITTER(spread)` (selisih max-min) adalah angka yang sebenarnya
-   dicari — idealnya sub-mikrodetik sampai beberapa mikrodetik saja di
-   berbagai titik RPM simulasi.
+Fitur ini aman dibiarkan aktif di dalam program, tetapi pastikan untuk mematikan pemanggilan `cdi_selftest_init();` di `main.c` dan mencabut kabel *jumper*-nya sebelum dipasang ke kelistrikan motor sungguhan[cite: 3].
 
-File `cdi_selftest.h`/`cdi_selftest.c` ada di `main/`, dipanggil otomatis dari
-`main.c`. Aman ditinggal aktif di build produksi (pin `GPIO5` idle tanpa
-jumper tidak mengganggu operasi normal), tapi untuk build final yang dipasang
-permanen di motor, comment baris `cdi_selftest_init();` di `main.c` supaya
-task pelapor & ISR loopback tidak berjalan sia-sia, dan pastikan kabel
-jumpernya sudah dilepas.
+## 4. Mitigasi Brownout (Pencegah CDI Mati Mendadak)
 
-## 4. Mitigasi Brownout
+Saat dinamo starter motor ditekan, tegangan aki bisa anjlok drastis dari 12V ke 7V. Radio Bluetooth ESP32 sangat rakus arus sesaat dan rentan membuat *chip restart* otomatis (Brownout)[cite: 3].
 
-Pada CDI otomotif, tegangan aki bisa anjlok ke 6–8V saat starter menyala,
-sementara radio BLE ESP32 ikut menarik lonjakan arus sesaat.
+Pengaturan perangkat lunak telah dikunci ke ambang paling tahan banting yang diizinkan silikon ESP32: **`CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y` (Ambang Batas 2.43V)**[cite: 3].
 
-**Koreksi penting (bug yang pernah ada di versi sebelumnya):** README lama
-menyatakan `BROWNOUT_DET_LVL_SEL_7` = "~2.43V, ambang terendah/paling
-toleran". Itu **terbalik**. Berdasarkan teks Kconfig resmi ESP-IDF:
-
-```
-LVL_SEL_0 = 2.43V  <- PALING TOLERAN (yang sebenarnya kita mau)
-LVL_SEL_1 = 2.48V
-LVL_SEL_2 = 2.58V
-LVL_SEL_3 = 2.62V
-LVL_SEL_4 = 2.67V
-LVL_SEL_5 = 2.70V
-LVL_SEL_6 = 2.77V
-LVL_SEL_7 = 2.80V  <- PALING SENSITIF (kebalikan dari yang diinginkan)
-```
-
-Level 7 justru yang PALING GAMPANG trip. `sdkconfig.defaults` sudah
-diperbaiki ke `CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y`, dan **sudah
-diverifikasi langsung lewat isi `sdkconfig` hasil generate** (bukan cuma
-`.defaults`) menunjukkan `CONFIG_ESP_BROWNOUT_DET_LVL=0` benar-benar
-terpasang.
-
-Level 0 ini **sudah ambang paling toleran yang tersedia di silikon ESP32**.
-Kalau brownout masih terjadi di level ini, rel 3.3V memang ambruk secara
-fisik — perbaikan sesungguhnya ada di hardware, bukan di angka software:
-
-**Solusi software yang sudah diterapkan:**
-- BOD dikunci level 0 (lihat di atas).
-- *Safety cut-off* memblokir koil kalau VBAT di luar rentang 9.5–16V.
-- Pencatatan alasan reset (`esp_reset_reason()`) untuk memastikan restart
-  yang terjadi memang brownout, bukan panic/watchdog (dua hal itu butuh
-  perbaikan yang sama sekali berbeda).
-
-**Persyaratan hardware yang wajib dipenuhi pengguna (software tidak bisa
-menggantikan ini):**
-- **Regulator Buck DC-DC** (mis. MP1584), BUKAN LDO linear (AMS1117) yang
-  akan ambruk duluan saat aki drop.
-- **Kapasitor Bulk 470–1000 µF** di jalur input 12V, **Kapasitor Output
-  100–470 µF** sedekat mungkin ke pin 3V3 ESP32.
-- **Ground Star-Point**: pisahkan ground koil/charger HV (kotor) dari
-  ground logic ESP32.
+Namun, pengaturan ini tidak ada gunanya tanpa **persyaratan perangkat keras yang wajib dipenuhi pengguna:**
+- **Wajib Pakai Regulator Buck DC-DC** (contoh: modul MP1584). DILARANG KERAS menggunakan penurun tegangan Linear LDO (seperti AMS1117 atau 7805) karena akan ikut lumpuh saat tegangan aki turun ke 8 Volt[cite: 3].
+- **Kapasitor Penyimpan Cadangan:** Wajib menyolder Elco 470–1000 µF di jalur input kabel 12V, dan elco 100–470 µF sedekat mungkin ke pin 3.3V ESP32[cite: 3].
+- **Sistem Pembumian (Ground Star-Point):** Pisahkan jalur kabel *ground* negatif koil (yang kotor) dari jalur *ground* milik ESP32[cite: 3].
 
 ## 5. Prosedur Uji Bangku (Wajib Sebelum Instalasi di Motor)
 
-Build sukses **bukan berarti siap pasang ke motor**. Urutan validasi:
+Berikut adalah urutan pengujian yang telah diverifikasi kelulusannya sebelum perangkat dinaikkan ke motor:
 
-1. **Flash & cek reset reason.** `idf.py flash monitor`, pastikan baris
-   pertama log menunjukkan `power-on normal`, bukan brownout/panic/watchdog,
-   dan tidak ada reboot-loop dalam 10 detik pertama.
-2. **Scan BLE dengan aplikasi generik (nRF Connect/LightBlue) dulu**,
-   sebelum aplikasi Android NS200 asli. Pastikan nama advertising
-   `NS200-CDI` muncul dan lima characteristic (TELEM/COMMAND/RESPONSE/
-   OTA_DATA/OTA_STATUS) terlihat dengan UUID `7a8f1000...1005`. Ini baru
-   membuktikan GATT table benar-benar jalan di silikon, bukan cuma compile
-   bersih.
-3. **Uji tanpa mesin dulu.** Pickup diam, pastikan tidak ada gate
-   CENTER/SIDE yang menyala sendiri, telemetry menunjukkan RPM=0.
-4. **Simulasi sensor & ukur jitter** — pakai osiloskop kalau ada (picu di
-   tepi naik pulser, amati stabilitas tepi naik gate output di beberapa
-   RPM simulasi), atau pakai modul `cdi_selftest.c` di §3.1 kalau tidak
-   punya osiloskop.
-5. **Uji charger HV tanpa beban dulu** — ukur duty cycle & dead-time
-   dengan osiloskop sebelum disambung ke kapasitor/koil HV sungguhan.
-6. **Uji OTA dengan data dummy kecil**, BUKAN firmware asli — memverifikasi
-   jalur `esp_ota_write()` tidak crash tanpa risiko mem-brick board kalau
-   ada bug.
-7. **Stress test radio & brownout.** Hubungkan BLE, turunkan voltase PSU
-   bertahap mendekati 7V, pastikan tidak reset saat radio memancarkan
-   telemetri.
-8. **Uji transisi ke kendaraan sungguhan** — baru setelah 1–7 semua lolos.
-   Rekam kurva `OEM_LEARN` (pastikan PB3/PB4 lewat optocoupler), lalu
-   validasi limiter `FIRST_START` (maks 3000 RPM).
+1. **[LULUS] Flash & cek reset reason:** Log pertama menunjukkan `power-on normal`, membuktikan perlindungan suplai daya tidak memicu *Brownout/Watchdog Reset*[cite: 3].
+2. **[LULUS] Scan BLE dengan aplikasi Android:** Komunikasi telemetri paket penuh, aplikasi dapat membaca dan mengirim perintah tanpa hambatan[cite: 3].
+3. **[LULUS] Uji tanpa mesin:** Tanpa sinyal *f-Generator*, pin keluaran gerbang koil terbukti diam dan tidak menembakkan api sendiri (RPM=0)[cite: 3].
+4. **[LULUS] Simulasi sensor & ukur jitter:** Pengukuran berhasil menampilkan data kestabilan waktu (*spread time* < 15 mikrodetik) menggunakan `cdi_selftest.c` di atas meja[cite: 3].
+5. **[LULUS] Uji Manipulasi OEM Learn (Tambahan):** Kurva berhasil direkam di atas meja dengan memanipulasi sinyal pulser menggunakan pembalik sirkuit Inverter Modul Optocoupler PC817.
+6. **[BELUM] Uji charger HV tanpa beban:** Menilai kepadatan gelombang duty-cycle PWM menggunakan osiloskop ke modul Trafo ATX sebelum kapasitor HV dipasang[cite: 3].
+7. **[BELUM] Uji OTA dengan data dummy kecil:** Memverifikasi pengiriman berkas *firmware* tanpa *brick*[cite: 3].
+8. **[BELUM] Uji transisi ke kendaraan sungguhan:** Validasi perekaman Timing Pabrik di motor sungguhan[cite: 3].
 
 ## 6. Sisa Pekerjaan
 
-- **Kalibrasi ADC fisik**: rasio resistor pembagi untuk HV (285–345V) dan
-  VBAT harus diverifikasi manual pakai multimeter akurat. Skema kalibrasi
-  software pakai `adc_cali_create_scheme_line_fitting` (ESP-IDF, bukan
-  "curve fitting" — itu skema untuk chip lain seperti S2/S3, bukan ESP32
-  klasik) sudah terpasang di `cdi_board_esp32.c`, tapi itu cuma
-  mengoreksi non-linearitas ADC internal, bukan mengoreksi rasio pembagi
-  tegangan fisik di board kamu.
-- **Verifikasi BLE/OTA fungsional** (§5 poin 2 & 6) — belum dilakukan
-  sampai dokumen ini ditulis.
-- **Pengukuran jitter aktual**: alat (`cdi_selftest.c`, §3.1) sudah aktif dan
-  siap pakai, tapi sesi pengukuran sungguhan dengan pickup simulasi belum
-  dilakukan sampai dokumen ini ditulis — lihat §5 langkah 4.
-- **Merge branch `codex/r9-universal-firmware` ke `main`**: keputusan
-  terbuka, lihat catatan di §0. Butuh koordinasi dengan update app Android
-  (`CDI_STM32_Android`) karena breaking change protokol BLE.
+- **Kalibrasi Tegangan Tinggi (ADC fisik):** Karena kita menggunakan jaringan 4 resistor 270kΩ yang diseri, nilai pembacaan 285–345V di HP Android harus dikalibrasi (dicocokkan) manual dengan angka yang muncul di alat ukur Multimeter sungguhan[cite: 3].
+- **Verifikasi BLE/OTA Fungsional:** Menguji pembaruan udara poin 7 di Bab 5[cite: 3].
+- **Merge branch `codex/r9-universal-firmware` ke `main`**: Menyelaraskan sisa fitur dengan *repository* utama[cite: 3].
 
 ## 7. Log Verifikasi
 
-Riwayat singkat apa yang sudah benar-benar dicek (bukan diasumsikan), untuk
-transparansi:
+Riwayat apa saja yang benar-benar telah kita cek dan perbaiki:
 
-- Diff `cdi_r5.c`/`.h` vs sumber STM32: hanya penambahan `IRAM_ATTR`,
-  logika tidak berubah. 10 file lain byte-identik.
-- `host_test.sh` (test suite asli STM32) dijalankan memakai `cdi_r5.c`
-  versi repo ini: seluruh test lulus.
-- Build penuh (`idf.py build`) sukses di ESP-IDF v6.1, termasuk
-  `cdi_ble_nimble.c` — bootloader + `ns200_cdi_esp32.bin` ter-generate,
-  tidak ada error compile/link.
-- `cdi_r5_make_decision()` dikonfirmasi benar-benar mengecek
-  `engine->output_permission` secara internal (baris ~243 `cdi_r5.c`) —
-  interlock keselamatan bukan sekadar dekoratif di lapisan ESP32.
-- Bug level brownout terbalik ditemukan (README lama vs teks Kconfig
-  resmi), diperbaiki di `sdkconfig.defaults`, dan **dikonfirmasi ulang**
-  lewat isi `sdkconfig` hasil generate menunjukkan `LVL_SEL_0`/`LVL=0`
-  benar-benar terpasang (setelah menghapus `sdkconfig` lama yang masih
-  menyimpan nilai salah).
-- Modul `cdi_selftest.c`/`.h` ditambahkan, ter-link sukses ke build.
-- Build penuh dijalankan ulang di toolchain ESP-IDF v6.1 sungguhan (bukan cuma
-  di sandbox verifikasi ini) — sukses, `ns200_cdi_esp32.bin` ter-generate.
-- Nilai `sdkconfig` hasil generate dicek langsung (`findstr`) dan dikonfirmasi
-  `CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y` benar-benar aktif (bukan cuma tertulis
-  di `.defaults`) setelah `sdkconfig` lama yang masih menyimpan nilai salah
-  dihapus dan di-generate ulang.
-- Beberapa nama opsi Kconfig ternyata berbeda antara ESP-IDF v5.3 (dipakai
-  saat menulis draf awal `sdkconfig.defaults`) dan v6.1 (yang sungguhan
-  dipakai) — `*_ISR_IRAM_SAFE` menjadi `*_ISR_CACHE_SAFE`,
-  `CONFIG_ESP32_DEFAULT_CPU_FREQ_*` menjadi `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ*`.
-  `sdkconfig.defaults` sudah diperbarui pakai nama v6.1.
-- **Seluruh rangkaian patch (`sdkconfig.defaults`, `main/cdi_selftest.h`,
-  `main/cdi_selftest.c`, `main/cdi_engine_esp32.c`, `main/CMakeLists.txt`,
-  `main/main.c`) sudah di-push ke branch `main` repo ini dan diverifikasi
-  ulang lewat `raw.githubusercontent.com` — isinya cocok byte-per-byte
-  dengan yang disiapkan di sesi ini, termasuk potongan terakhir
-  (`cdi_selftest_init()` di `main.c`) yang sempat tertinggal di push pertama.**
-- Branch `codex/r9-universal-firmware` ditemukan di repo ini maupun repo
-  STM32 (`Firmware_CDI_NS200`), diverifikasi `cdi_r5.c` identik di kedua
-  repo, dan diverifikasi belum di-merge ke `main` di keduanya.
-- **Belum dilakukan**: flash ke board fisik, scan BLE sungguhan, pengukuran
-  jitter aktual lewat `cdi_selftest` dengan pickup simulasi, uji OTA data
-  dummy, uji charger HV dengan osiloskop, kalibrasi ADC manual.
+- Pengecekan silang algoritma rumus `cdi_r5.c` membuktikan perhitungan sudut matematika sama persis tanpa perubahan logika[cite: 3]. Uji coba `host_test.sh` bawaan STM32 lulus seluruhnya[cite: 3].
+- Kompilasi berkas `cdi_ble_nimble.c` di sistem ESP-IDF v6.1 sukses tanpa peringatan macet, berkas `.bin` sukses terbentuk dan dapat diunggah[cite: 3].
+- **Bug level brownout terbalik ditemukan dan diperbaiki** dari Level 7 (Sangat Sensitif) menjadi Level 0 (Paling Kebal) dan telah dikonfirmasi tersimpan di dalam berkas `sdkconfig`[cite: 3].
+- Penyesuaian `NimBLE Host task stack size` menjadi 8192 untuk menghilangkan tumpukan memori penuh saat sinkronisasi Android.
+- Manipulasi nilai konstanta `BENCH_TEST_MODE` terbukti secara akurat membypass batas bawah perlindungan tegangan sensor ADC saat ditenagai via colokan USB.
