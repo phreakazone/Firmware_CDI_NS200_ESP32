@@ -38,6 +38,7 @@ void cdi_r5_charger_update(cdi_r5_charger_t *charger,
                            uint16_t target_volts,
                            uint16_t adc_center,
                            uint16_t adc_side,
+                           bool side_monitor_enabled,
                            bool output_permission,
                            bool software_enable,
                            bool hardware_fault_low)
@@ -48,11 +49,18 @@ void cdi_r5_charger_update(cdi_r5_charger_t *charger,
     if (target > 345u) target = 345u;
     charger->center_volts = cdi_r5_hv_adc_to_volts(adc_center);
     charger->side_volts = cdi_r5_hv_adc_to_volts(adc_side);
-    low = charger->center_volts < charger->side_volts ?
-          charger->center_volts : charger->side_volts;
-    high = charger->center_volts > charger->side_volts ?
-           charger->center_volts : charger->side_volts;
-    difference = high - low;
+    if (side_monitor_enabled) {
+        low = charger->center_volts < charger->side_volts ?
+              charger->center_volts : charger->side_volts;
+        high = charger->center_volts > charger->side_volts ?
+               charger->center_volts : charger->side_volts;
+        difference = high - low;
+    } else {
+        /* PCB dasar adalah CENTER-only. HV_S_ADC dipulldown ketika modul SIDE
+         * tidak dipasang, jadi nilai nol tidak boleh dianggap HV imbalance. */
+        low = high = charger->center_volts;
+        difference = 0u;
+    }
     if (hardware_fault_low || high >= HARD_OVERVOLT_VOLTS ||
         (high > 80u && difference > MAX_IMBALANCE_VOLTS)) {
         charger->fault_latched = true;

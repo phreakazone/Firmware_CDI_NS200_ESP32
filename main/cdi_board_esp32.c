@@ -32,7 +32,8 @@ void cdi_board_gpio_init(void)
     gpio_config_t in_pd = {
         .pin_bit_mask = 1ULL << CDI_PIN_PICKUP_CENTER,
         .mode = GPIO_MODE_INPUT,
-        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        /* PICKUP_DIG sudah ditarik ke 3V3 oleh RPICK4 4.7k pada PCB. */
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .intr_type = GPIO_INTR_ANYEDGE, /* diseleksi rising/falling di driver capture */
     };
@@ -41,8 +42,10 @@ void cdi_board_gpio_init(void)
     gpio_config_t oem_taps = {
         .pin_bit_mask = (1ULL << CDI_PIN_OEM_TAP_CENTER) | (1ULL << CDI_PIN_OEM_TAP_SIDE),
         .mode = GPIO_MODE_INPUT,
-        .pull_down_en = GPIO_PULLDOWN_ENABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
+        /* ROEMC5/ROEMS5 adalah pull-up eksternal. PC817 menarik LOW saat aktif. */
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE,
     };
     gpio_config(&oem_taps);
 
@@ -56,7 +59,8 @@ void cdi_board_gpio_init(void)
 
     gpio_config_t outs = {
         .pin_bit_mask = (1ULL << CDI_PIN_GATE_CENTER) | (1ULL << CDI_PIN_GATE_SIDE) |
-                        (1ULL << CDI_PIN_STROBE) | (1ULL << CDI_PIN_FAN_RELAY),
+                        (1ULL << CDI_PIN_STROBE) | (1ULL << CDI_PIN_FAN_RELAY) |
+                        (1ULL << CDI_PIN_AUDIO_PWM),
         .mode = GPIO_MODE_OUTPUT,
     };
     gpio_config(&outs);
@@ -65,6 +69,7 @@ void cdi_board_gpio_init(void)
     gpio_set_level(CDI_PIN_GATE_SIDE, 0);
     gpio_set_level(CDI_PIN_STROBE, 0);
     gpio_set_level(CDI_PIN_FAN_RELAY, 0);
+    gpio_set_level(CDI_PIN_AUDIO_PWM, 0);
 }
 
 void cdi_board_adc_init(void)

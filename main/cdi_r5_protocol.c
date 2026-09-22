@@ -600,6 +600,18 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
                 "CAPS,5,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START");
+        } else if (what != NULL && strcmp(what, "INFO") == 0) {
+            /* Additive query: existing commands/UUID/telemetry remain unchanged. */
+            n=snprintf(body,sizeof(body),
+                "INFO,ESP32,R9,5,3,IGNITRA_R9_MODULAR");
+        } else if (what != NULL &&
+                   (!strcmp(what, "HARDWARE") || !strcmp(what, "HW"))) {
+            n=snprintf(body,sizeof(body),
+                "HARDWARE,1,CENTER_BASE,SIDE_OPTIONAL,THERMAL_OPTIONAL,OEM_LEARN_OPTIONAL,AUX_OPTIONAL,TPS_DIAG_OPTIONAL");
+        } else if (what != NULL && strcmp(what, "ADC") == 0) {
+            n=snprintf(body,sizeof(body),"ADC,%u,%u,%u,%u,%u,%u,%u,%u",
+                p->tps_raw,p->temp_raw,p->tps_ref_raw,p->hv_center,p->hv_side,
+                p->vbat_raw,p->hardware_fault?1u:0u,p->fan_output?1u:0u);
         } else if (what != NULL && strcmp(what, "PROFILE") == 0) {
             const cdi_r7_setup_t *s=&p->store->setup;
             n=snprintf(body,sizeof(body),"PROFILE,%s,%u,%u,%d,%d,%u,%u",

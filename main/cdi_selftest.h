@@ -22,13 +22,9 @@
  * PEMASANGAN (bench saja, JANGAN dipasang saat firmware sungguhan jalan
  * di motor -- pin loopback ini tidak dipakai sama sekali untuk operasi
  * normal):
- *   1. Kabel jumper: CDI_PIN_GATE_CENTER (GPIO25) -> CDI_PIN_SELFTEST_LOOPBACK (GPIO5)
- *   2. Simulasikan pulsa pickup dari alat kamu (lihat cdi_selftest.c untuk
- *      rumus frekuensi) ke CDI_PIN_PA0_PICKUP (GPIO4) -- CEK DULU tegangan
- *      keluaran alatnya dengan fungsi "Voltage test"-nya sendiri sebelum
- *      disambung; ESP32 GPIO TIDAK tahan >3.3V. Kalau alat kamu keluar 5V
- *      atau ikut tegangan baterai 9V, pasang pembagi tegangan (mis. 10k/10k)
- *      dulu sebelum masuk ke GPIO4.
+ *   1. Kabel sementara: TP_GATE_C -> TP_BENCH_LOOP.
+ *   2. Simulasikan pickup melalui J1.10/PICKUP_RAW agar sinyal tetap melewati
+ *      rangkaian proteksi dan LM339 sebelum mencapai GPIO4/PICKUP_DIG.
  *   3. Buka serial monitor, tunggu ringkasan statistik tercetak tiap ~1 detik.
  */
 #include <stdint.h>
@@ -37,7 +33,7 @@
  * sudah dikonfigurasi) dan SETELAH kamu menambahkan baris
  * cdi_selftest_mark_center_due(due); di center_slot_cb (lihat instruksi
  * patch). Aman dibiarkan terpasang di kode; cukup jangan sambungkan kabel
- * jumper-nya saat firmware dipasang ke motor sungguhan. */
+ * jumper test-pad-nya saat firmware dipasang ke motor sungguhan. */
 void cdi_selftest_init(void);
 
 /* Dipanggil dari dalam center_slot_cb (konteks ISR IRAM) tepat sebelum atau

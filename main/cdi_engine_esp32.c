@@ -432,6 +432,13 @@ void cdi_engine_tick_1ms(void)
         cdi_board_adc_raw(CDI_ADC_IDX_TEMP), &temperature_cdeg);
     s_fan_on = cdi_r9_fan_update(&store.setup, temperature_cdeg, temperature_valid, s_fan_on);
     cdi_board_set_fan(s_fan_on);
+    protocol.temp_raw = cdi_board_adc_raw(CDI_ADC_IDX_TEMP);
+    protocol.tps_ref_raw = cdi_board_adc_raw(CDI_ADC_IDX_TPS_REF);
+    protocol.vbat_raw = cdi_board_adc_raw(CDI_ADC_IDX_VBAT);
+    protocol.temperature_cdeg = temperature_valid ? temperature_cdeg : INT16_MIN;
+    protocol.temperature_valid = temperature_valid;
+    protocol.fan_output = s_fan_on;
+    protocol.hardware_fault = fault_low;
 
     if (store.setup.stage != CDI_R7_STAGE_FIRST_START) {
         s_first_start_good_ms = 0; protocol.first_start_seconds = 0u;
@@ -457,6 +464,7 @@ void cdi_engine_tick_1ms(void)
     cdi_r5_charger_update(&charger,
         engine.hv_target_override ? engine.hv_target_override : protocol.working.hv_target_volts,
         cdi_board_adc_raw(CDI_ADC_IDX_HVC), cdi_board_adc_raw(CDI_ADC_IDX_HVS),
+        engine.side_enabled,
         engine.output_permission, engine.output_permission && !protocol.strobe_active, fault_low);
     cdi_board_charger_set_duty_permille(charger.duty_permille);
 

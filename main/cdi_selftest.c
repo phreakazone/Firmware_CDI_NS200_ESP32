@@ -1,4 +1,5 @@
 #include "cdi_selftest.h"
+#include "cdi_board_esp32.h"
 #include "cdi_timebase.h"
 #include "driver/gpio.h"
 #include "esp_attr.h"
@@ -7,8 +8,6 @@
 #include "freertos/task.h"
 #include <stdbool.h>
 #include <inttypes.h>
-
-#define CDI_PIN_SELFTEST_LOOPBACK GPIO_NUM_5
 
 static const char *TAG = "cdi_selftest";
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -48,7 +47,7 @@ static void selftest_report_task(void *arg)
     (void)arg;
     ESP_LOGW(TAG, "SELF-TEST AKTIF -- pastikan kabel jumper GPIO%d(gate)->GPIO%d(loopback) "
                    "HANYA terpasang saat uji meja, LEPAS sebelum dipasang ke motor.",
-              (int)25, (int)CDI_PIN_SELFTEST_LOOPBACK);
+              (int)CDI_PIN_GATE_C, (int)CDI_PIN_BENCH_LOOP);
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
 
@@ -60,7 +59,7 @@ static void selftest_report_task(void *arg)
 
         if (count == 0) {
             /* FIX: Pesan log diperjelas agar tidak salah pin */
-            ESP_LOGI(TAG, "Menunggu pulsa... Pastikan f-Generator GM328A masuk ke GPIO4 (Pickup) DAN jumper GPIO25->GPIO5 terpasang.");
+            ESP_LOGI(TAG, "Menunggu pulsa... Masukkan generator melalui J1.10/PICKUP_RAW dan hubungkan TP_GATE_C->TP_BENCH_LOOP.");
             continue;
         }
         int64_t mean = sum / (int64_t)count;
@@ -79,14 +78,14 @@ void cdi_selftest_init(void)
     }
 
     gpio_config_t cfg = {
-        .pin_bit_mask = 1ULL << CDI_PIN_SELFTEST_LOOPBACK,
+        .pin_bit_mask = 1ULL << CDI_PIN_BENCH_LOOP,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
         .intr_type = GPIO_INTR_POSEDGE,
     };
     ESP_ERROR_CHECK(gpio_config(&cfg));
-    ESP_ERROR_CHECK(gpio_isr_handler_add(CDI_PIN_SELFTEST_LOOPBACK, loopback_isr, NULL));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(CDI_PIN_BENCH_LOOP, loopback_isr, NULL));
 
     xTaskCreatePinnedToCore(selftest_report_task, "cdi_selftest", 3072, NULL, 2, NULL, 0);
 }

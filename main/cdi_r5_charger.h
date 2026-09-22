@@ -28,6 +28,7 @@ void cdi_r5_charger_update(cdi_r5_charger_t *charger,
                            uint16_t target_volts,
                            uint16_t adc_center,
                            uint16_t adc_side,
+                           bool side_monitor_enabled,
                            bool output_permission,
                            bool software_enable,
                            bool hardware_fault_low);
