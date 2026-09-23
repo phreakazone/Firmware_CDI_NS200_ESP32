@@ -4,16 +4,17 @@
 
 IgniTra adalah CDI programmable pengganti CDI OEM. Paket **Core** menjalankan
 satu coil melalui `J1.12`. Modul **SIDE** menambahkan coil kedua melalui
-`J1.6`. Modul lain menambah suhu/fan, OEM Learn, AUX, atau diagnosis TPS.
+`J1.6`. Modul lain menambah suhu/fan, OEM Learn, AUX/strobe, diagnosis TPS,
+atau receiver Bluetooth audio eksternal.
 
 IgniTra bukan ECU injeksi; modul EFI belum digunakan pada versi ini.
 
 ## 2. Pilih susunan hardware
 
-**Core selalu menjadi dasar. Semua modul opsional dapat dipasang bersamaan;**
-SIDE, THERMAL, OEM Learn, AUX, dan TPS Diagnostic bukan paket yang saling
-menggantikan. Pilihan `Core 1 Coil` atau `Dual Coil` hanya menentukan jumlah
-kanal pengapian, bukan membatasi modul tambahan.
+**Core selalu menjadi dasar. Semua modul dan aksesori dapat dipasang
+bersamaan.** SIDE, THERMAL, OEM Learn, AUX, dan TPS Diagnostic adalah modul
+firmware. BT Audio adalah aksesori aplikasi terpisah. Pilihan `Core 1 Coil`
+atau `Dual Coil` hanya menentukan jumlah kanal pengapian.
 
 | Bagian | Fungsi | Dampak di aplikasi | Syarat penggunaan |
 |---|---|---|---|
@@ -21,8 +22,9 @@ kanal pengapian, bukan membatasi modul tambahan.
 | SIDE | Coil kedua J1.6 | Mengubah profil menjadi Dual Coil | Offset SIDE harus valid |
 | THERMAL | Sensor suhu dan relay kipas | Kartu suhu serta FAN OFF/ON/AUTO | Sensor dipasang dan dikalibrasi |
 | OEM Learn | Membaca pulsa CDI OEM melalui isolator | Menu OEM Learn di Setup Lanjutan | Dipakai hanya saat sesi belajar |
-| AUX | Output bantu/strobe | Kontrol AUX/strobe | Fungsi audio firmware belum aktif |
+| AUX | Output bantu/strobe | Kontrol strobe | Hardware strobe dipasang |
 | TPS Diagnostic | Memantau referensi dan sinyal TPS | Data TPS raw/reference dan diagnosis | Jalur TPS diagnostic dipasang |
+| BT Audio | Receiver suara aplikasi Android | Status pemasangan dan rute audio | Receiver A2DP serta amplifier/speaker |
 
 Contoh susunan yang sah:
 
@@ -32,7 +34,7 @@ Contoh susunan yang sah:
 | Core + THERMAL + AUX | Core 1 Coil | Suhu/fan dan strobe |
 | Core + SIDE + THERMAL | Dual Coil | Coil kedua dan suhu/fan |
 | Core + SIDE + OEM Learn + TPS Diagnostic | Dual Coil | OEM Learn dan diagnosis TPS |
-| Core + seluruh modul | Core atau Dual sesuai SIDE | Semua menu modul tersedia |
+| Core + seluruh modul | Core atau Dual sesuai SIDE | Semua menu termasuk BT Audio tersedia |
 
 Memasang modul fisik dan mengaktifkannya di aplikasi adalah dua pekerjaan
 berbeda. Konektor pasif tidak selalu dapat dideteksi otomatis, sehingga setiap
@@ -148,7 +150,39 @@ OEM Learn bukan Setup Mudah. CDI OEM harus tetap menjalankan mesin dan modul
 PC817 membaca pulsa OEM secara pasif. Fitur ini hanya untuk pengembangan profil
 atau pengukuran offset.
 
-## 9. Diagnosis singkat
+## 9. Bluetooth audio eksternal
+
+Suara mesin tetap dibuat aplikasi Android. ESP32 CDI hanya mengirim data RPM
+melalui BLE. Android kemudian mengirim suara ke receiver audio melalui Classic
+Bluetooth A2DP.
+
+Artinya ada dua sambungan yang berbeda:
+
+- `NS200-CDI`: BLE untuk dashboard, setup, dan RPM;
+- receiver audio: A2DP untuk suara ke amplifier/speaker.
+
+Keduanya dapat dipakai bersamaan. Receiver harus mendukung A2DP; modul
+BLE-only tidak dapat menerima suara media. Pilihan jumlah silinder dan karakter
+suara tetap berada di aplikasi Android.
+
+Status aplikasi harus dibaca bertahap:
+
+1. `Tidak dipasang`;
+2. `Dipasang, belum dipasangkan`;
+3. `Dipasangkan, belum tersambung`;
+4. `Tersambung, belum menjadi keluaran media`;
+5. `Siap — audio diarahkan ke modul`.
+
+Aplikasi menyimpan pilihan bahwa receiver dipasang untuk Serial CDI tersebut.
+Status pairing, connection, dan rute media dibaca dari Android; firmware dan
+GET,MODULES tidak mengetahui receiver. `AUDIO_PWM/GPIO23` tetap reserved dan
+LOW.
+
+Untuk mencegah noise/putus-putus, jauhkan antena receiver dari ESP32, trafo, dan
+coil; gunakan filter/decoupling catu pada modul; jangan mengambil daya
+amplifier dari pin 3V3 ESP32.
+
+## 10. Diagnosis singkat
 
 ### RPM tetap nol
 
@@ -179,7 +213,7 @@ atau pengukuran offset.
 - Pastikan THERMAL dipilih dan terpasang.
 - Periksa J1.3 dan lakukan kalibrasi tiga titik sebelum FAN AUTO.
 
-## 10. Keselamatan servis
+## 11. Keselamatan servis
 
 - Charger, kapasitor, `BRIDGE_PLUS`, `COIL_CENTER`, dan `COIL_SIDE` berbahaya
   walaupun mesin telah mati.

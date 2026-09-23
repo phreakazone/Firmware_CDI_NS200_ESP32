@@ -47,6 +47,8 @@ main/cdi_firmware.* bukan implementasi aktif dan tidak boleh dijadikan referensi
 | RPM/TPS/HV/fault | Telemetry dan GET,STATUS | Hanya last-known |
 | Izin menulis | Koneksi + binding + safety firmware | Tidak boleh dipalsukan |
 | Mode demo | State lokal terpisah | Tidak pernah dikirim ke perangkat |
+| Receiver BT audio dipasang | Pengaturan aplikasi per serial CDI | Ya, accessory config |
+| Pairing/connection/rute audio | Android Bluetooth/AudioManager | Hanya status Android |
 
 ---
 
@@ -90,8 +92,37 @@ phreakazone/CDI_STM32_Android saat dokumen dibuat.
 | StrobeScreen.kt | Gabungkan | Strobe menjadi bagian Pemeriksaan/TDC, bukan flow setup terpisah |
 | WiringWorkshopHubScreen.kt | Hapus dari navigasi pengguna | Ganti menu Wiring menjadi Buku Petunjuk; editor/perakitan PCB bukan fitur pengguna produk |
 | BleHexScreen.kt | Ubah | Jadikan halaman Perangkat/Diagnostik; raw console hanya mode developer |
-| SoundScreen.kt | Pertahankan sebagai lokal | Beri label “Simulasi suara di ponsel”; jangan menyatakan AUDIO_PWM perangkat aktif |
+| SoundScreen.kt | Ubah | Pertahankan generator suara Android; tambah status rute Bluetooth A2DP eksternal, tanpa command audio ke firmware |
 | MainActivity.kt / ScreenTab | Ubah | Navigasi: Dashboard, Map, Setup, Buku, Perangkat; fitur lanjutan muncul sesuai capability |
+
+### Daftar file target yang disarankan
+
+Developer tidak wajib memakai nama persis ini, tetapi tanggung jawabnya harus
+dipisah:
+
+| Aksi | File | Isi |
+|---|---|---|
+| Ubah | CdiProtocol.kt | Frame, CRC, telemetry, sealed response parser |
+| Ubah | BleCdiClient.kt | Scan UUID, queue satu command, subscription, reconnect |
+| Pecah | CdiViewModel.kt | Jangan lagi menjadi parser + storage + demo + UI sekaligus |
+| Tambah | DeviceModels.kt | Identity, Caps, Modules, Commission, Status, Setup |
+| Tambah | DeviceRepository.kt | Snapshot authoritative dari firmware |
+| Tambah | SyncCoordinator.kt | Initial query dan refresh sesudah command |
+| Tambah | BindingStore.kt | Record lokal per serial |
+| Tambah | BindingCoordinator.kt | Evaluasi BOUND/UNBOUND/LEGACY |
+| Tambah | WritePolicy.kt | Satu gate untuk seluruh write |
+| Tambah | AudioRouteRepository.kt | Pairing/connection/rute A2DP Android |
+| Bangun ulang | SetupScreen.kt | Pemasangan, Pemeriksaan, First Start/Ready |
+| Ubah | SoundScreen.kt | Generator suara lama + status/pemilih rute media |
+| Ubah | DashboardScreen.kt | Kartu berdasarkan MODULES/TEMP |
+| Ubah | MapsScreen.kt | CAPS/META/PROFILE dinamis |
+| Ubah | BleHexScreen.kt | Perangkat/diagnostik, raw write tetap digate |
+| Hapus dari route | QuickSetupGuideScreen.kt | Tidak boleh menjadi setup kedua |
+| Hapus dari route | WiringWorkshopHubScreen.kt | Diganti Buku Petunjuk |
+
+Urutan aman untuk refactor: buat model/parser dan repository terlebih dahulu,
+baru pindahkan Screen satu per satu. Jangan menghapus UI lama sebelum jalur
+baru sudah membaca firmware dengan benar.
 
 ### Bug kompatibilitas yang harus diperbaiki
 
@@ -315,7 +346,7 @@ yang hanya mengizinkan satu modul.
 | 0 | 1 | SIDE/coil kedua |
 | 1 | 2 | THERMAL/fan |
 | 2 | 4 | OEM_LEARN |
-| 3 | 8 | AUX/strobe; audio masih reserved |
+| 3 | 8 | AUX/strobe |
 | 4 | 16 | TPS_DIAG |
 
 - installed: pilihan konfigurasi yang disimpan;
@@ -453,19 +484,6 @@ R9.2 mengirim firmwareEnforced=0. Firmware belum mengautentikasi ponsel;
 binding adalah perlindungan UI agar pengguna tidak salah mengubah CDI. Ini
 bukan DRM atau keamanan kriptografis.
 
-~~~kotlin
-data class BindingRecord(
-    val serial: String,
-    val appInstanceId: String,
-    val boundAtEpochMs: Long,
-    val firmwareRelease: String,
-    val vehicleName: String?
-)
-~~~
-
-appInstanceId dibuat sekali dan disimpan dengan Android Keystore/encrypted
-storage.
-
 Tanpa binding: scan/connect, telemetry read-only, versi, serial, status, fault,
 dan Buku Petunjuk. Binding cocok wajib untuk Setup, modul, map, tuning, limiter,
 profile, fan, kalibrasi suhu, OEM Learn, OTA, dan reset.
@@ -477,6 +495,108 @@ Aturan:
 3. Serial adalah identifier publik, bukan password.
 4. Perangkat baru meminta konfirmasi sebelum mengganti binding aktif.
 5. Raw BLE console juga tunduk pada write gate.
+
+### Binding bukan pairing Bluetooth
+
+Developer harus membedakan tiga hal:
+
+| Istilah | Pelaku | Fungsi |
+|---|---|---|
+| BLE connection | Android ↔ ESP32 CDI | Telemetry dan command |
+| App binding | Database lokal aplikasi ↔ serial CDI | Mencegah salah menulis CDI |
+| BT audio pairing | Android ↔ receiver A2DP eksternal | Mengirim suara mesin |
+
+Ketiganya independen. Menghapus pairing receiver audio tidak menghapus binding
+CDI. Unbind CDI juga tidak menghapus pairing Bluetooth Android.
+
+### Penyimpanan binding
+
+Simpan satu record per serial, bukan hanya satu variabel global:
+
+~~~kotlin
+data class BindingRecord(
+    val serial: String,
+    val appInstanceId: String,
+    val vehicleName: String?,
+    val boundAtEpochMs: Long,
+    val lastFirmwareSemver: String,
+    val lastBuildId: String
+)
+
+interface BindingStore {
+    suspend fun find(serial: String): BindingRecord?
+    suspend fun save(record: BindingRecord)
+    suspend fun remove(serial: String)
+}
+~~~
+
+appInstanceId dibuat satu kali per instalasi dan disimpan terenkripsi. Record
+binding boleh berada di DataStore terenkripsi; jangan simpan serial sebagai
+secret karena serial bersifat publik.
+
+### Flow koneksi pertama
+
+1. Hubungkan BLE dan selesaikan initial sync sampai IDENTITY diterima.
+2. Jika serial UNAVAILABLE, tampilkan mode read-only dan pesan bahwa firmware
+   tidak menyediakan identitas valid.
+3. Cari BindingStore berdasarkan serial.
+4. Jika record ditemukan, state menjadi BOUND dan lanjut full sync.
+5. Jika belum ada, tampilkan dialog **Perangkat baru** berisi serial, versi,
+   build, dan nama BLE.
+6. Tombol **Lihat saja** masuk READY_READ_ONLY.
+7. Tombol **Bind dan lanjutkan** menyimpan record lokal, lalu masuk READY_FULL.
+8. Binding tidak mengirim command apa pun ke firmware R9.2.
+
+### Flow koneksi berikutnya
+
+| Kondisi | BindingState | Hasil |
+|---|---|---|
+| Serial ada dalam BindingStore | BOUND | Fitur tulis tersedia setelah sync |
+| Serial baru | UNBOUND | Read-only sampai pengguna bind |
+| Serial UNAVAILABLE | UNAVAILABLE | Read-only |
+| IDENTITY unsupported | LEGACY | Ikuti kebijakan adapter legacy |
+| Record rusak/tidak dapat didekripsi | ERROR | Read-only dan tawarkan reset binding lokal |
+
+### Menu Perangkat → Binding
+
+Halaman harus menampilkan:
+
+- Serial Number CDI;
+- nama kendaraan lokal;
+- status Terikat/Belum terikat/Legacy;
+- firmware release, semver, build, platform;
+- tanggal binding;
+- tombol Bind, Ubah nama, dan Lepaskan binding;
+- penjelasan bahwa binding R9.2 hanya berlaku di aplikasi ini.
+
+Lepaskan binding hanya menghapus record lokal setelah konfirmasi. Jangan kirim
+factory reset atau SETUP,RESET. Setelah unbind, sesi langsung turun menjadi
+READY_READ_ONLY dan semua tombol tulis dinonaktifkan.
+
+### Gate tulis pusat
+
+Jangan mengulang logika binding pada setiap Screen. Semua tindakan mutasi harus
+melewati satu fungsi:
+
+~~~kotlin
+fun WritePolicy.check(
+    session: DeviceSessionState,
+    requiredCapability: String? = null,
+    requiresStoppedEngine: Boolean = false
+): WriteDecision {
+    if (session.phase != READY_FULL) return Denied("Perangkat belum siap")
+    if (session.binding !is Bound) return Denied("Binding diperlukan")
+    if (requiredCapability != null &&
+        requiredCapability !in session.caps.tokens) return Denied("Tidak didukung")
+    if (requiresStoppedEngine && !session.status.safeStopped)
+        return Denied("Matikan mesin dan tunggu HV <30 V")
+    return Allowed
+}
+~~~
+
+Setup, MODULE SET, map, limiter, profile, fan, OEM Learn, OTA, reset, dan raw
+console write wajib melewati policy tersebut. SoundScreen Android dan pemilihan
+rute A2DP tidak memerlukan binding karena tidak menulis firmware.
 
 ---
 
@@ -562,10 +682,11 @@ OEM Learn hanya menu lanjutan:
 Syarat: RPM 0, HV tidak aktif, HVC/HVS <30 V. Setelah ACK, query ulang
 MODULES, SETUP, TEMP, dan STATUS.
 
-Konfigurasi modul di aplikasi harus berupa lima switch/checkbox independen.
+Konfigurasi firmware di aplikasi harus berupa lima switch/checkbox independen.
 Mengaktifkan THERMAL tidak boleh mematikan SIDE; mengaktifkan OEM_LEARN tidak
 boleh menghapus AUX atau TPS_DIAG. Pilihan Core/Dual berada di bagian profil
-pengapian, terpisah dari daftar modul.
+pengapian, terpisah dari daftar modul. Receiver BT audio ditampilkan di bagian
+aksesori aplikasi, bukan dicampur ke installedMask firmware.
 
 | Kondisi | UI |
 |---|---|
@@ -576,9 +697,11 @@ pengapian, terpisah dari daftar modul.
 | THERMAL installed, valid=0 | Sensor belum valid |
 | THERMAL installed, valid=1 | Suhu, mode fan, ambang, relay |
 | OEM_LEARN tidak installed | Sembunyikan OEM Learn |
-| AUX tidak installed | Sembunyikan strobe/AUX |
+| AUX tidak installed | Sembunyikan kontrol strobe |
+| AUX installed | Tampilkan kontrol strobe |
 | TPS_DIAG installed | Tampilkan TPS raw, reference, range, dan status diagnosis |
-| Semua modul installed | Tampilkan SIDE, THERMAL, OEM Learn, AUX, dan TPS Diagnostic sekaligus |
+| BT audio dikonfigurasi lokal | Tampilkan status receiver dan rute A2DP Android |
+| Semua modul firmware installed | Tampilkan SIDE, THERMAL, OEM Learn, AUX, dan TPS Diagnostic sekaligus |
 
 Nama CENTER Cap dan SIDE Cap lama diganti menjadi HV Core/Center (J1.12) dan
 HV Side (J1.6). Jangan menyimpulkan modul dari tipe motor.
@@ -590,12 +713,16 @@ HV Side (J1.6). Jangan menyimpulkan modul dari tipe motor.
 | SIDE | Semua modul | Dual dipilih, coil J1.6 dipasang, offset valid |
 | THERMAL | Semua modul | Sensor valid; kalibrasi diperlukan untuk nilai akurat/AUTO |
 | OEM_LEARN | Semua modul | Hardware isolator terpasang; sesi learn hanya dari menu lanjutan |
-| AUX | Semua modul | Hardware output yang sesuai terpasang; audio tetap reserved |
+| AUX | Semua modul | Hardware strobe terpasang |
 | TPS_DIAG | Semua modul | Jalur reference/signal terpasang dan rentang dapat dibaca |
 
 installed, active, observed, dan fault ditampilkan per modul. Satu modul fault
 tidak boleh membuat aplikasi menyembunyikan atau menonaktifkan status modul
 lain yang sehat.
+
+Receiver BT audio bukan bagian GET,MODULES karena tidak mempunyai jalur status
+ke ESP32. Simpan pilihan “receiver dipasang” sebagai AccessoryConfig lokal
+berdasarkan Serial CDI. Status koneksi dan rute audio berasal dari Android.
 
 ---
 
@@ -644,6 +771,49 @@ Perintah legacy LOAD/SAVE/LIMIT/LIVE dipakai hanya oleh adapter firmware lama.
 Limiter memakai PROFILE yang dijepit CAPS, bukan 3.000..11.500. Menu fan hanya
 muncul jika FAN ada dan THERMAL installed. Dyno TRIM -200..200 berarti
 -20,0°..+20,0° dan belum permanen sebelum COMMIT.
+
+### Modul Bluetooth audio eksternal
+
+Suara tetap dibuat oleh aplikasi Android. Jalur datanya:
+
+    Telemetry RPM: ESP32 CDI --BLE--> Android
+    Audio mesin: Android --Classic Bluetooth A2DP--> receiver BT audio
+    Suara fisik: receiver/amp --> speaker
+
+Tidak ada GET,AUDIO, AUDIO,SET, atau AUDIO,CONFIG pada firmware. GPIO23
+AUDIO_PWM tetap reserved dan LOW. Pilihan silinder, karakter suara, dan volume
+tetap merupakan state SoundScreen Android.
+
+BLE CDI dan A2DP dapat digunakan bersamaan karena merupakan koneksi dan profil
+berbeda. Aplikasi tidak boleh menganggap “CDI BLE tersambung” berarti receiver
+audio juga tersambung.
+
+Status UI BT audio adalah gabungan dua sumber:
+
+| Data | Sumber | Label UI |
+|---|---|---|
+| Modul dipasang | AccessoryConfig lokal per serial CDI | Terpasang/dikonfigurasi |
+| Receiver paired | Android Bluetooth settings/API | Sudah dipasangkan |
+| Receiver connected | BluetoothProfile.A2DP | Tersambung |
+| Audio diarahkan ke receiver | AudioManager/current media route | Audio aktif ke modul |
+| Modul benar-benar menyala | Tidak dapat diketahui tanpa pin sense | Tidak dapat diverifikasi |
+
+Urutan status yang disarankan:
+
+1. Tidak dipasang.
+2. Dipasang, belum dipasangkan.
+3. Dipasangkan, belum tersambung.
+4. Tersambung, tetapi bukan rute media aktif.
+5. Siap — rute media A2DP aktif.
+
+Modul harus berupa receiver **Classic Bluetooth A2DP**. Modul BLE-only tidak
+dapat menerima audio media Android. Jangan menjalankan A2DP pada ESP32 CDI yang
+sama karena firmware ini hanya menyediakan BLE kontrol/telemetry dan tugas
+pengapian harus tetap diprioritaskan.
+
+Potensi gangguan bukan konflik protokol, tetapi interferensi RF/catu daya.
+Gunakan receiver eksternal, pisahkan antena dari ESP32/trafo/coil, beri
+decoupling lokal, dan jangan mengambil arus amplifier besar dari 3V3 ESP32.
 
 ---
 
@@ -770,12 +940,14 @@ sequence sah.
 | Dashboard | Telemetry, output, modul, fault |
 | Maps | Slot, grid, limiter, profile |
 | Setup | Tiga layar commissioning dan modul |
+| Suara | Simulasi mesin Android dan status rute receiver A2DP eksternal |
 | Buku | Hardware, J1, Core/Dual, status, troubleshooting |
 | Perangkat | BLE, serial, firmware, platform, binding, OTA, diagnostics |
 
 Setup Lanjutan hanya menampilkan fitur CAPS. Buku memakai
 BUKU_PETUNJUK_PENGGUNA.md. Editor PCB/workshop skematik tidak masuk UI produk
-massal. Sound diberi label “Simulasi suara di ponsel”.
+massal. Sound diberi label “Simulasi suara Android”; receiver A2DP ditampilkan
+sebagai rute keluaran, bukan sebagai penghasil suara firmware.
 
 ---
 
@@ -808,7 +980,176 @@ Jangan memutus koneksi karena query tambahan mengembalikan ERR,GET.
 
 ---
 
-## 18. Rencana implementasi
+## 18. Cookbook integrasi Android untuk developer pemula
+
+Bagian ini adalah urutan implementasi minimum. Jangan mulai dari perubahan UI
+acak; selesaikan lapisan sesuai urutan.
+
+### 18.1 Lapisan aplikasi
+
+| Lapisan | Tanggung jawab | Tidak boleh dilakukan |
+|---|---|---|
+| BleTransport | Scan, connect, subscribe, frame, queue, timeout | Mengubah state Setup |
+| ProtocolParser | String/binary menjadi model bertipe | Menampilkan Toast/UI |
+| DeviceRepository | Menggabungkan response menjadi DeviceSnapshot | Menyimpan state demo |
+| BindingStore | Record binding lokal per serial | Mengirim command firmware |
+| WritePolicy | Memutuskan fitur tulis boleh/tidak | Menggantikan safety firmware |
+| ViewModel | Mengubah snapshot menjadi UiState dan action | Parsing frame mentah |
+| Screen | Render UiState dan mengirim intent | Memanggil BluetoothGatt langsung |
+| AudioRouteRepository | Status A2DP/rute media Android | Mengklaim status dari GET,MODULES |
+
+### 18.2 Startup aplikasi
+
+1. Muat appInstanceId dan BindingStore.
+2. Buat DemoSessionState terpisah; jangan menyalinnya ke DeviceSessionState.
+3. Minta permission sesuai versi Android.
+4. Tampilkan Dashboard dalam kondisi disconnected.
+5. Tombol Hubungkan membuka scan BLE CDI.
+
+Permission minimum:
+
+| Android | BLE CDI | Status receiver audio |
+|---|---|---|
+| Android 12+ | BLUETOOTH_SCAN dan BLUETOOTH_CONNECT runtime | BLUETOOTH_CONNECT untuk membaca perangkat terhubung |
+| Android 11 ke bawah | ACCESS_FINE_LOCATION untuk scan BLE | Gunakan API Bluetooth yang tersedia pada versi tersebut |
+
+Aplikasi tidak perlu meminta pairing ESP32 untuk menjalankan BLE protocol yang
+sekarang. Receiver audio dipasangkan melalui pengaturan Bluetooth Android
+sebagai perangkat media.
+
+### 18.3 Connect dan initial sync
+
+~~~kotlin
+suspend fun connectAndSync(device: BluetoothDevice) {
+    session.updatePhase(CONNECTING)
+    transport.connect(device)
+    session.updatePhase(SUBSCRIBING)
+    transport.subscribe(RESPONSE_UUID)
+    transport.subscribe(TELEMETRY_UUID)
+    session.updatePhase(SYNCING)
+    val result = syncCoordinator.runInitialQueries()
+    if (!result.requiredOk) {
+        session.enterDegraded(result)
+        return
+    }
+    bindingCoordinator.evaluate(result.identity)
+    session.publishSnapshot(result.snapshot)
+}
+~~~
+
+Setiap query masuk queue yang sama. Jangan mengirim 17 frame sekaligus.
+Tunggu response/ERR/timeout command sebelumnya. Query opsional yang unsupported
+dicatat lalu dilanjutkan.
+
+### 18.4 Evaluasi binding
+
+1. Parser menerima IDENTITY.
+2. BindingCoordinator mencari record berdasarkan serial.
+3. Jika cocok: READY_FULL.
+4. Jika tidak cocok: NEEDS_BINDING.
+5. Dialog binding hanya muncul setelah VERSION dan IDENTITY tersedia agar
+   pengguna melihat perangkat yang benar.
+6. Setelah Bind ditekan, simpan record dan ubah state; tidak ada command BLE.
+7. Jalankan refresh MODULES, COMMISSION, STATUS sebelum membuka Setup.
+
+### 18.5 Konfigurasi seluruh modul dan aksesori
+
+Pada Setup → Hardware Terpasang tampilkan lima switch firmware independen:
+
+| Switch | Command | Status sesudah ACK |
+|---|---|---|
+| Coil SIDE | MODULE,SET,SIDE,ON/OFF | Refresh MODULES dan SETUP |
+| Thermal/Fan | MODULE,SET,THERMAL,ON/OFF | Refresh MODULES, TEMP |
+| OEM Learn | MODULE,SET,OEM_LEARN,ON/OFF | Refresh MODULES, MODE, LEARN |
+| AUX/Strobe | MODULE,SET,AUX,ON/OFF | Refresh MODULES |
+| TPS Diagnostic | MODULE,SET,TPS_DIAG,ON/OFF | Refresh MODULES, ADC |
+
+Semua command MODULE SET memerlukan mesin berhenti dan HV <30 V. UI boleh
+mengirim beberapa perubahan, tetapi harus satu per satu dan menunggu ACK.
+Jika perubahan ketiga gagal, jangan mengubah dua modul sebelumnya kembali
+secara lokal; refresh MODULES dan tampilkan hasil firmware sebenarnya.
+
+Di bawahnya tampilkan bagian **Aksesori aplikasi**:
+
+| Aksesori | Penyimpanan | Status |
+|---|---|---|
+| Receiver BT audio eksternal | AccessoryConfig lokal dengan key Serial CDI | Android paired/connected/current media route |
+
+Mengubah aksesori BT audio tidak mengirim command ke firmware dan tidak
+memerlukan mesin berhenti. Bila serial belum tersedia, jangan simpan konfigurasi
+aksesori sebagai milik CDI tertentu.
+
+### 18.6 Flow pengguna baru dengan semua modul
+
+1. Pasang hardware lalu hidupkan kontak tanpa starter.
+2. Hubungkan BLE CDI.
+3. Selesaikan binding lokal.
+4. Buka Hardware Terpasang dan aktifkan semua modul firmware yang benar-benar ada.
+5. Jika receiver audio dipasang, aktifkan aksesori BT Audio pada aplikasi dan
+   pasangkan receiver melalui Android.
+6. Pilih Core atau Dual pada profil pengapian.
+7. Jalankan Pemeriksaan pickup, TDC, dan TPS.
+8. Jalankan First Start lalu konfirmasi Ready.
+9. Dashboard mulai dari MODULES/STATUS, bukan pilihan lokal.
+10. Buka Suara, pilih preset simulasi, periksa rute media, lalu Play.
+
+### 18.7 Refresh setelah command
+
+| Command berhasil | Query ulang wajib |
+|---|---|
+| MODULE,SET | MODULES dan query modul terkait |
+| SETUP apa pun | COMMISSION, SETUP, STATUS |
+| SET/FAN | TEMP, MODULES |
+| SET/PROFILE | PROFILE, CAPS, META, SETUP |
+| MAP/SAVE atau SELECT | META lalu CELL |
+| MODE/LEARN | MODE, LEARN, COMMISSION |
+| OTA selesai | Reconnect dan full initial sync |
+
+ACK hanya berarti command diterima. Tampilan final selalu berasal dari query
+ulang, bukan dari optimistik state.
+
+### 18.8 Menu dan gate
+
+| Menu | Tanpa CDI | CDI read-only | CDI bound/full |
+|---|---|---|---|
+| Dashboard | Demo/offline | Telemetry | Telemetry |
+| Maps | Lihat cache/demo | Lihat saja | Edit/save |
+| Setup | Buku ringkas | Lihat status | Jalankan setup/modul |
+| Suara | Simulasi HP/BT audio | Sama | Sama |
+| Buku | Aktif | Aktif | Aktif |
+| Perangkat | Scan | Versi/serial/bind | Binding/OTA/diagnostik |
+
+### 18.9 Disconnect dan reconnect
+
+Saat BLE putus:
+
+1. batalkan command in-flight;
+2. tandai telemetry stale;
+3. nonaktifkan seluruh tombol write;
+4. jangan mengubah commissioning atau installedMask;
+5. suara Android boleh dihentikan atau tetap berjalan sesuai pilihan UX, tetapi
+   RPM harus turun ke nol bila telemetry sudah stale;
+6. setelah reconnect, lakukan full initial sync dan evaluasi binding lagi.
+
+### 18.10 Mapping response ke UI
+
+| Response | State aplikasi | Konsumen |
+|---|---|---|
+| VERSION/INFO | identity/platform/protocol | Perangkat, adapter |
+| IDENTITY | serial/binding policy | BindingCoordinator |
+| CAPS/HARDWARE | feature availability | Navigasi dan control ranges |
+| MODULES | module state | Dashboard, Setup Hardware |
+| COMMISSION/SETUP | setup state | Setup tiga layar |
+| STATUS/telemetry | live state | Dashboard, safety gate |
+| META/CELL/PROFILE | tuning state | Maps |
+| TEMP/ADC | sensor state | Dashboard, diagnosis |
+| MODE/LEARN | advanced setup | OEM Learn |
+| OTA | update state | Perangkat/OTA |
+| Android A2DP route | audio route state | SoundScreen |
+
+---
+
+## 19. Rencana implementasi
 
 ### Tahap 1 — Parser dan session
 
@@ -856,7 +1197,7 @@ Jangan memutus koneksi karena query tambahan mengembalikan ERR,GET.
 
 ---
 
-## 19. Matriks pengujian
+## 20. Matriks pengujian
 
 ### Koneksi/protokol
 
@@ -890,6 +1231,10 @@ Jangan memutus koneksi karena query tambahan mengembalikan ERR,GET.
 - [ ] THERMAL off menyembunyikan fan.
 - [ ] Suhu invalid tidak menjadi angka.
 - [ ] Label J1.12/J1.6 benar.
+- [ ] installedMask 31 menampilkan seluruh modul firmware tanpa saling menonaktifkan.
+- [ ] BT audio configured lokal tidak diklaim connected tanpa status A2DP Android.
+- [ ] Receiver A2DP putus tidak memutus BLE CDI.
+- [ ] BLE CDI reconnect tidak mengubah pairing receiver audio.
 
 ### Map/tuning
 
@@ -912,7 +1257,7 @@ Jangan memutus koneksi karena query tambahan mengembalikan ERR,GET.
 
 ---
 
-## 20. Definition of Done
+## 21. Definition of Done
 
 Migrasi selesai bila:
 
@@ -926,11 +1271,13 @@ Migrasi selesai bila:
 8. map memakai transaksi R9 dengan unit benar;
 9. OTA memverifikasi platform dan versi setelah reboot;
 10. fallback firmware lama tidak merusak R9;
-11. matriks uji lulus.
+11. status BT audio membedakan installed, paired, connected, dan active route;
+12. Binding menu dapat dipahami tanpa menganggap binding sebagai pairing;
+13. matriks uji lulus.
 
 ---
 
-## 21. Aturan evolusi protokol
+## 22. Aturan evolusi protokol
 
 1. Jangan ubah UUID, paket v3, atau arti bit lama diam-diam.
 2. Fitur baru additive dan diiklankan CAPS.

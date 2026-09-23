@@ -1,6 +1,6 @@
 # IgniTra CDI ESP32 R9 Modular
 
-Firmware ESP-IDF untuk PCB IgniTra CDI berbasis ESP32-WROOM-32 DevKit 38-pin. Desain dasar menjalankan satu kanal pengapian CENTER; kanal SIDE, thermal/fan, OEM Learn, AUX, dan TPS diagnostic dipasang sebagai modul opsional. Semua modul opsional menggunakan bit konfigurasi independen dan dapat dipasang bersamaan; pilihan Core/Dual hanya menentukan kanal pengapian, bukan membatasi modul lain.
+Firmware ESP-IDF untuk PCB IgniTra CDI berbasis ESP32-WROOM-32 DevKit 38-pin. Desain dasar menjalankan satu kanal pengapian CENTER; kanal SIDE, thermal/fan, OEM Learn, AUX, dan TPS diagnostic dipasang sebagai modul firmware opsional. Semua modul tersebut menggunakan bit konfigurasi independen dan dapat dipasang bersamaan; pilihan Core/Dual hanya menentukan kanal pengapian. Receiver Bluetooth audio adalah aksesori aplikasi terpisah dan tidak masuk bit firmware.
 
 Firmware mempertahankan protokol aplikasi lama sambil menambahkan informasi hardware modular secara additive. Tidak ada UUID BLE, ukuran paket telemetri, atau perintah lama yang diubah.
 
@@ -140,7 +140,23 @@ Header 2×3 dinomori per baris: `1–2`, `3–4`, `5–6`.
 - Input pickup dan OEM tidak memakai pull-down internal karena PCB sudah memiliki pull-up eksternal. PC817 OEM dibaca pada falling edge karena keluarannya aktif-rendah.
 - Thermal AUTO memakai kalibrasi tiga titik. Jika kalibrasi/sensor tidak valid, output fan menyala sebagai fail-safe.
 - TPS utama tetap berfungsi tanpa modul TPS diagnostic.
-- AUDIO PWM masih reserved. GPIO23 dibuat output LOW agar tidak mengambang.
+- AUDIO_PWM tetap reserved. GPIO23 dibuat output LOW agar tidak mengambang.
+
+### Receiver Bluetooth audio eksternal
+
+Suara mesin dibuat aplikasi Android dari telemetry RPM. Jalurnya terpisah:
+
+    ESP32 CDI --BLE telemetry--> Android
+    Android --Classic Bluetooth A2DP--> receiver audio --> amplifier/speaker
+
+Receiver harus mendukung A2DP; modul BLE-only tidak menerima audio media.
+Aplikasi menyimpan pilihan bahwa receiver dipasang sebagai AccessoryConfig
+lokal per Serial CDI. Status paired/connected/rute aktif berasal dari Android,
+bukan firmware atau GET,MODULES.
+
+BLE CDI dan A2DP dapat aktif bersamaan. Untuk mengurangi gangguan, pisahkan
+antena receiver dari ESP32/trafo/coil, gunakan decoupling catu lokal, dan
+jangan mengambil arus amplifier dari pin 3V3 ESP32.
 
 ## Kompatibilitas aplikasi lama
 
