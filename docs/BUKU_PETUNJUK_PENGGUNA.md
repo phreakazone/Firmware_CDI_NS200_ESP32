@@ -10,17 +10,35 @@ IgniTra bukan ECU injeksi; modul EFI belum digunakan pada versi ini.
 
 ## 2. Pilih susunan hardware
 
-| Susunan | Pilihan aplikasi | Hasil |
-|---|---|---|
-| Core | `Core 1 Coil` | Satu coil pada J1.12 |
-| Core + SIDE | `Dual Coil` | J1.12 CENTER dan J1.6 SIDE |
-| Core + THERMAL | Thermal/Fan | Suhu dan relay kipas |
-| Core + OEM Learn | Menu Lanjutan | Merekam referensi CDI OEM |
-| Core + AUX | AUX | Strobe; audio belum aktif |
-| Core + TPS Diagnostic | TPS Diagnostic | Memantau referensi TPS |
+**Core selalu menjadi dasar. Semua modul opsional dapat dipasang bersamaan;**
+SIDE, THERMAL, OEM Learn, AUX, dan TPS Diagnostic bukan paket yang saling
+menggantikan. Pilihan `Core 1 Coil` atau `Dual Coil` hanya menentukan jumlah
+kanal pengapian, bukan membatasi modul tambahan.
 
-Memasang modul fisik dan memilih modul di aplikasi adalah dua pekerjaan berbeda.
-Aplikasi tidak dapat mengenali konektor pasif secara otomatis.
+| Bagian | Fungsi | Dampak di aplikasi | Syarat penggunaan |
+|---|---|---|---|
+| Core | Pengapian utama J1.12 | Selalu ada | Wajib |
+| SIDE | Coil kedua J1.6 | Mengubah profil menjadi Dual Coil | Offset SIDE harus valid |
+| THERMAL | Sensor suhu dan relay kipas | Kartu suhu serta FAN OFF/ON/AUTO | Sensor dipasang dan dikalibrasi |
+| OEM Learn | Membaca pulsa CDI OEM melalui isolator | Menu OEM Learn di Setup Lanjutan | Dipakai hanya saat sesi belajar |
+| AUX | Output bantu/strobe | Kontrol AUX/strobe | Fungsi audio firmware belum aktif |
+| TPS Diagnostic | Memantau referensi dan sinyal TPS | Data TPS raw/reference dan diagnosis | Jalur TPS diagnostic dipasang |
+
+Contoh susunan yang sah:
+
+| Susunan fisik | Profil pengapian | Fitur tambahan |
+|---|---|---|
+| Core | Core 1 Coil | Tidak ada |
+| Core + THERMAL + AUX | Core 1 Coil | Suhu/fan dan strobe |
+| Core + SIDE + THERMAL | Dual Coil | Coil kedua dan suhu/fan |
+| Core + SIDE + OEM Learn + TPS Diagnostic | Dual Coil | OEM Learn dan diagnosis TPS |
+| Core + seluruh modul | Core atau Dual sesuai SIDE | Semua menu modul tersedia |
+
+Memasang modul fisik dan mengaktifkannya di aplikasi adalah dua pekerjaan
+berbeda. Konektor pasif tidak selalu dapat dideteksi otomatis, sehingga setiap
+modul harus dicentang sesuai hardware yang benar-benar dipasang. Modul boleh
+aktif bersamaan, tetapi masing-masing tetap memiliki pemeriksaan dan syarat
+sendiri.
 
 ## 3. Pin harness utama J1
 
