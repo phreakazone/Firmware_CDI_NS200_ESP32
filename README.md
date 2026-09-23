@@ -156,6 +156,8 @@ Kontrak berikut tidak berubah:
 Tambahan untuk aplikasi baru:
 
 - `GET,INFO`
+- `GET,VERSION` untuk release, semantic version, build ID dan versi protokol.
+- `GET,IDENTITY` untuk serial unik ESP32 dan kebijakan binding aplikasi.
 - `GET,HARDWARE` atau `GET,HW`
 - `GET,ADC`
 - `GET,MODULES` untuk konfigurasi, aktivitas, bukti sinyal dan fault modul.

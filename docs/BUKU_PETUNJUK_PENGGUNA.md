@@ -110,6 +110,14 @@ Jangan mengaktifkan Dual Coil menggunakan offset tebakan.
 
 Nilai SIDE nol normal pada paket Core.
 
+### Identitas perangkat
+
+Menu Tentang/Perangkat menampilkan versi firmware dan Serial Number berbentuk
+`IGT-ESP32-XXXXXXXXXXXX`. Aplikasi dapat meminta binding lokal sebelum membuka
+menu Setup. Serial Number hanya identitas unit, bukan password atau kode rahasia.
+Jika berganti ponsel atau memasang ulang aplikasi, binding lokal perlu dilakukan
+ulang sesuai petunjuk aplikasi.
+
 ## 7. Fan otomatis
 
 FAN AUTO hanya dipakai bila modul THERMAL/FAN dan sensor suhu terpasang serta

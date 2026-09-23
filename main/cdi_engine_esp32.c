@@ -27,6 +27,8 @@
 #include "freertos/task.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_mac.h"
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "cdi_engine";
@@ -118,6 +120,19 @@ static bool persist_maps(const cdi_r5_store_image_t *image, void *context)
 {
     (void)context;
     return nvs_save_store(image);
+}
+
+static void set_protocol_device_identity(void)
+{
+    uint8_t mac[6];
+    char serial[CDI_DEVICE_SERIAL_LEN];
+    if (esp_efuse_mac_get_default(mac) != ESP_OK) {
+        cdi_r5_protocol_set_identity(&protocol, "UNAVAILABLE");
+        return;
+    }
+    (void)snprintf(serial, sizeof(serial), "IGT-ESP32-%02X%02X%02X%02X%02X%02X",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    cdi_r5_protocol_set_identity(&protocol, serial);
 }
 
 static bool esp32_ota_erase(void *context) {
@@ -347,6 +362,7 @@ void cdi_engine_init(void)
     }
 
     cdi_r5_protocol_init(&protocol, &store);
+    set_protocol_device_identity();
     cdi_r5_protocol_set_persist(&protocol, persist_maps, NULL);
     cdi_r8_oem_learn_init(&oem_learner, engine.timer_hz);
     

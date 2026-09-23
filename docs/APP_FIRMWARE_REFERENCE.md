@@ -23,6 +23,8 @@ Modular**. Sumber aktif berada pada `main/cdi_engine_esp32.c`,
 |---|---|
 | Platform | ESP32 klasik/WROOM-32 |
 | Generasi | R9 |
+| Semantic version | 9.2.0 |
+| Build ID | 20260923 |
 | Protokol perintah | 5 |
 | Paket BLE | Versi 3, 20 byte |
 | Advertising lama | `NS200-CDI` |
@@ -32,9 +34,10 @@ Modular**. Sumber aktif berada pada `main/cdi_engine_esp32.c`,
 | Advance format | -30,0° sampai +80,0° |
 | Schema NVS | 5, ukuran blob tidak berubah |
 
-Tambahan ini bersifat additive: `GET,MODULES`, `GET,COMMISSION`,
-`MODULE,SET,...`, `SETUP,INSTALL,...`, serta alias `SETUP,READY,DUAL,...`.
-Aplikasi lama tetap dapat memakai query dan perintah sebelumnya.
+Tambahan ini bersifat additive: `GET,VERSION`, `GET,IDENTITY`, `GET,MODULES`,
+`GET,COMMISSION`, `MODULE,SET,...`, `SETUP,INSTALL,...`, serta alias
+`SETUP,READY,DUAL,...`. Aplikasi lama tetap dapat memakai query dan perintah
+sebelumnya.
 
 ## 3. Urutan koneksi aplikasi
 
@@ -42,17 +45,87 @@ Setelah BLE tersambung, kirim:
 
 1. `PING`
 2. `GET,INFO`
-3. `GET,CAPS`
-4. `GET,HARDWARE`
-5. `GET,MODULES`
-6. `GET,COMMISSION`
-7. `GET,SETUP`
-8. `GET,META`
+3. `GET,VERSION`
+4. `GET,IDENTITY`
+5. `GET,CAPS`
+6. `GET,HARDWARE`
+7. `GET,MODULES`
+8. `GET,COMMISSION`
+9. `GET,SETUP`
+10. `GET,META`
 
-Jika firmware lama menjawab `ERR,GET` pada `MODULES` atau `COMMISSION`, kembali
-ke perilaku lama dan jangan memutus koneksi.
+Jika firmware lama menjawab `ERR,GET` pada query tambahan, kembali ke perilaku
+lama dan jangan memutus koneksi. Untuk firmware tanpa `GET,IDENTITY`, aplikasi
+boleh menampilkan `Serial tidak tersedia`, tetapi jangan membuat serial palsu
+dari nama BLE.
 
-## 4. BLE GATT
+## 4. Versi firmware dan identitas perangkat
+
+### Versi
+
+Query:
+
+```text
+GET,VERSION
+```
+
+Respons:
+
+```text
+VERSION,1,R9,9.2.0,20260923,ESP32,5,3
+```
+
+| Posisi | Isi |
+|---:|---|
+| 1 | Schema respons `1` |
+| 2 | Release keluarga `R9` |
+| 3 | Semantic version |
+| 4 | Build ID |
+| 5 | Platform MCU |
+| 6 | Versi protokol perintah |
+| 7 | Versi paket telemetry |
+
+Aplikasi harus membandingkan versi secara numerik per komponen, bukan sebagai
+string biasa. Contoh `9.10.0` lebih baru daripada `9.2.0`.
+
+Aturan UI:
+
+- Tampilkan release, semantic version, dan build ID pada halaman Perangkat.
+- Gunakan versi protokol/capability untuk keputusan kompatibilitas, bukan hanya
+  semantic version.
+- Versi firmware tidak boleh dijadikan kunci lisensi.
+
+### Serial Number
+
+Query:
+
+```text
+GET,IDENTITY
+```
+
+Respons normal:
+
+```text
+IDENTITY,1,IGT-ESP32-XXXXXXXXXXXX,SERIAL_V1,LOCAL_APP,0
+```
+
+| Posisi | Isi |
+|---:|---|
+| 1 | Schema `1` |
+| 2 | Serial Number |
+| 3 | Skema serial `SERIAL_V1` |
+| 4 | Kebijakan binding `LOCAL_APP` |
+| 5 | `firmwareEnforced`: `0` belum dikunci firmware |
+
+Serial dibuat dari base MAC/eFuse ESP32 sehingga stabil setelah restart dan
+update firmware. Serial boleh ditampilkan atau dicetak sebagai QR karena
+**serial bukan rahasia**. Jika pembacaan eFuse gagal, firmware mengirim
+`UNAVAILABLE`; aplikasi tidak boleh melakukan binding permanen pada nilai itu.
+
+`GET,INFO` lama sengaja tidak ditambah field agar parser aplikasi lama tidak
+rusak.
+
+## 5. BLE GATT
 
 | Fungsi | UUID | Properti |
 |---|---|---|
@@ -65,7 +138,7 @@ ke perilaku lama dan jangan memutus koneksi.
 
 Semua integer multibyte paket biner memakai little-endian.
 
-## 5. Paket telemetri lama
+## 6. Paket telemetri lama
 
 Header bersama:
 
@@ -105,7 +178,7 @@ Kind DIAGNOSTIC:
 Flags output: bit 0 CORE/CENTER, bit 1 SIDE, bit 2 strobe, bit 3 fan. Status
 modul diperoleh melalui `GET,MODULES`; paket 20 byte tidak diubah.
 
-## 6. Frame perintah
+## 7. Frame perintah
 
 ```text
 @sequence,COMMAND,arg1,arg2*CRC16\n
@@ -114,7 +187,76 @@ modul diperoleh melalui `GET,MODULES`; paket 20 byte tidak diubah.
 CRC16-CCITT memakai polynomial `0x1021`, initial `0xFFFF`, dihitung dari
 `sequence` sampai argumen terakhir tanpa `@`, `*CRC`, CR, atau LF.
 
-## 7. Status modul
+## 8. Binding aplikasi
+
+### Keputusan implementasi R9.2
+
+Binding diperlukan agar satu instalasi aplikasi mengetahui CDI mana yang sedang
+diatur dan tidak salah menulis setup ke kendaraan lain. Pada R9.2 binding adalah
+**binding lokal aplikasi**, belum sistem anti-pembajakan firmware.
+
+Alur wajib aplikasi:
+
+1. Aplikasi membuat `appInstanceId` acak saat instalasi pertama dan menyimpannya
+   melalui Android Keystore/encrypted storage.
+2. Setelah membaca `GET,IDENTITY`, tampilkan Serial Number dan minta konfirmasi
+   `Bind perangkat ini`.
+3. Simpan record berisi `serial`, `appInstanceId`, waktu binding, release
+   firmware, dan nama kendaraan opsional.
+4. Pada koneksi berikutnya, bandingkan serial aktual dengan record aktif.
+5. Bila sama, buka fitur penuh.
+6. Bila berbeda, hanya mode baca dibuka sampai pengguna memilih binding baru.
+
+Fitur yang boleh dibuka tanpa binding:
+
+- scan dan koneksi BLE;
+- dashboard/telemetry read-only;
+- versi, Serial Number, status hardware dan fault;
+- Buku Petunjuk.
+
+Fitur yang wajib dikunci sampai binding cocok:
+
+- seluruh Setup/Commissioning;
+- konfigurasi modul;
+- penulisan map, live tune dan Dyno;
+- limiter, profil, fan dan kalibrasi suhu;
+- OEM Learn;
+- OTA firmware;
+- reset konfigurasi.
+
+Binding lokal berlaku per instalasi aplikasi. Beberapa ponsel masih dapat
+melakukan binding ke unit yang sama setelah konfirmasi pengguna. Menghapus data
+atau memasang ulang aplikasi menghapus binding lokal dan memerlukan binding
+ulang.
+
+### Yang tidak boleh dilakukan
+
+- Jangan menggunakan Serial Number sebagai password, token, HMAC key, atau PIN.
+- Jangan menganggap nama advertising BLE sebagai identitas unik.
+- Jangan mengunci telemetry/fault; data diagnosis harus tetap dapat dibaca.
+- Jangan mengaktifkan penguncian firmware hanya berdasarkan string serial.
+- Jangan membuat serial baru di aplikasi ketika firmware menjawab
+  `UNAVAILABLE`.
+
+### Binding produksi yang benar
+
+Jika nanti dibutuhkan pembatasan lisensi atau satu pemilik eksklusif, firmware
+harus ditambah `CLAIM_HMAC_V1`, bukan sekadar membandingkan serial. Kebutuhan
+minimum:
+
+1. Secret unik 128/256-bit diprogram saat produksi dan tidak dikirim sebagai
+   telemetry.
+2. QR produk memuat Serial Number dan claim code sekali pakai.
+3. BLE menggunakan pairing/encryption.
+4. Firmware mengeluarkan nonce acak; aplikasi/backend membalas challenge HMAC.
+5. Firmware menyimpan owner key hash dan menolak perintah tulis tanpa sesi sah.
+6. Tersedia recovery kepemilikan dan factory reset fisik yang terdokumentasi.
+
+Sebelum semua unsur tersebut tersedia, field `firmwareEnforced` tetap `0` dan
+aplikasi hanya menerapkan penguncian UI lokal. Ini mencegah perangkat lama
+terkunci permanen hanya karena ponsel hilang atau aplikasi dihapus.
+
+## 9. Status modul
 
 Query `GET,MODULES` menghasilkan:
 
@@ -159,7 +301,7 @@ MODULE,SET,TPS_DIAG,ON|OFF
 Mesin harus berhenti dan HV di bawah 30 V. Menonaktifkan SIDE juga mematikan
 output SIDE; menonaktifkan THERMAL mengubah fan menjadi OFF.
 
-## 8. Dashboard setelah setup
+## 10. Dashboard setelah setup
 
 | Kondisi | Kartu/gauge |
 |---|---|
@@ -174,7 +316,7 @@ output SIDE; menonaktifkan THERMAL mengubah fan menjadi OFF.
 Pin tetap ditulis untuk diagnosis. Nama `CENTER Cap` lama diganti menjadi
 `HV Core/Center (J1.12)` dan `SIDE Cap` menjadi `HV Side (J1.6)`.
 
-## 9. Flow setup aplikasi yang baru
+## 11. Flow setup aplikasi yang baru
 
 Enam tab lama (`Baru`, `Pulser`, `TDC`, `TPS`, `First Start`, `Ready`) diganti
 menjadi tiga layar. State firmware tetap dipertahankan.
@@ -229,7 +371,7 @@ karena map beban tidak bekerja benar.
 
 SIDE tidak boleh aktif hanya berdasarkan model motor; modul dan offset wajib.
 
-## 10. Status commissioning
+## 12. Status commissioning
 
 `GET,COMMISSION` menghasilkan:
 
@@ -260,11 +402,13 @@ COMMISSION,1,stage,nextAction,ready,advisoryMask
 Gunakan `nextAction` untuk tombol utama; jangan menebak tahap dari halaman
 lokal aplikasi.
 
-## 11. Query lain
+## 13. Query lain
 
 | Query | Isi |
 |---|---|
 | `GET,INFO` | Platform, R9, versi protokol/paket |
+| `GET,VERSION` | Release, semver, build, platform, protokol |
+| `GET,IDENTITY` | Serial Number dan kebijakan binding |
 | `GET,HARDWARE` | Kemampuan PCB/modul |
 | `GET,CAPS` | Batas dan capability |
 | `GET,STATUS` | RPM, TPS, HV, map, permission, PRO |
@@ -277,14 +421,14 @@ lokal aplikasi.
 | `GET,LEARN` | OEM Learn |
 | `GET,OTA` | OTA |
 
-## 12. Buku Petunjuk dalam aplikasi
+## 14. Buku Petunjuk dalam aplikasi
 
 Menu Wiring/Skematik lama diganti menjadi **Buku Petunjuk**: paket dan modul,
 pin J1, pemasangan Core/Dual, Setup Mudah, arti status, dan diagnosis. Sumber
 konten pengguna berada di [`BUKU_PETUNJUK_PENGGUNA.md`](BUKU_PETUNJUK_PENGGUNA.md).
 Jangan membawa editor skematik/perakitan PCB ke alur pengguna produk jadi.
 
-## 13. Aturan perubahan berikutnya
+## 15. Aturan perubahan berikutnya
 
 1. Jangan mengubah UUID, paket v3, atau arti bit lama diam-diam.
 2. Tambahkan fitur secara additive dan iklankan melalui `GET,CAPS`.
@@ -293,3 +437,5 @@ Jangan membawa editor skematik/perakitan PCB ke alur pengguna produk jadi.
 5. BLE putus tidak boleh mengubah izin output pengapian.
 6. Perubahan pin harus memperbarui header board, README, skematik dan dokumen ini.
 7. Modul EFI belum menjadi bagian capability R9.
+8. Serial Number adalah identifier publik, bukan credential.
+9. Saat `firmwareEnforced=0`, penguncian Setup adalah tanggung jawab aplikasi.

@@ -8,6 +8,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define CDI_FW_RELEASE "R9"
+#define CDI_FW_SEMVER "9.2.0"
+#define CDI_FW_BUILD_ID "20260923"
+#define CDI_DEVICE_SERIAL_LEN 32u
+
 typedef bool (*cdi_r5_persist_fn)(const cdi_r5_store_image_t *image,
                                   void *context);
 
@@ -28,6 +33,7 @@ typedef struct {
     cdi_r8_ota_t *ota;
     cdi_r5_persist_fn persist;
     void *persist_context;
+    char device_serial[CDI_DEVICE_SERIAL_LEN];
 } cdi_r5_protocol_t;
 
 uint16_t cdi_r5_crc16(const void *data, size_t length);
@@ -36,6 +42,8 @@ void cdi_r5_protocol_init(cdi_r5_protocol_t *protocol,
 void cdi_r5_protocol_set_persist(cdi_r5_protocol_t *protocol,
                                  cdi_r5_persist_fn persist,
                                  void *context);
+void cdi_r5_protocol_set_identity(cdi_r5_protocol_t *protocol,
+                                  const char *device_serial);
 void cdi_r8_protocol_attach_oem_learner(cdi_r5_protocol_t *protocol,
                                         cdi_r8_oem_learner_t *learner);
 void cdi_r8_protocol_attach_ota(cdi_r5_protocol_t *protocol,

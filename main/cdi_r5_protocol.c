@@ -40,6 +40,18 @@ void cdi_r5_protocol_set_persist(cdi_r5_protocol_t *p,
     p->persist_context = context;
 }
 
+void cdi_r5_protocol_set_identity(cdi_r5_protocol_t *p,
+                                  const char *device_serial)
+{
+    if (p == NULL) return;
+    memset(p->device_serial, 0, sizeof(p->device_serial));
+    if (device_serial == NULL || *device_serial == '\0') {
+        strcpy(p->device_serial, "UNAVAILABLE");
+        return;
+    }
+    strncpy(p->device_serial, device_serial, sizeof(p->device_serial) - 1u);
+}
+
 void cdi_r8_protocol_attach_oem_learner(cdi_r5_protocol_t *p,
                                         cdi_r8_oem_learner_t *learner)
 {
@@ -743,11 +755,18 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->tps_closed_adc,s->tps_open_adc,s->first_start_hv_volts,s->center_enabled,s->side_enabled,s->fan_mode,p->pickup_quality);
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
-                "CAPS,5,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START,MODULE_STATUS,QUICK_INSTALL");
+                "CAPS,5,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START,MODULE_STATUS,QUICK_INSTALL,FW_VERSION,DEVICE_SERIAL,APP_LOCAL_BINDING");
         } else if (what != NULL && strcmp(what, "INFO") == 0) {
             /* Additive query: existing commands/UUID/telemetry remain unchanged. */
             n=snprintf(body,sizeof(body),
                 "INFO,ESP32,R9,5,3,IGNITRA_R9_MODULAR");
+        } else if (what != NULL && strcmp(what, "VERSION") == 0) {
+            n=snprintf(body,sizeof(body),"VERSION,1,%s,%s,%s,ESP32,5,3",
+                CDI_FW_RELEASE,CDI_FW_SEMVER,CDI_FW_BUILD_ID);
+        } else if (what != NULL && strcmp(what, "IDENTITY") == 0) {
+            n=snprintf(body,sizeof(body),
+                "IDENTITY,1,%s,SERIAL_V1,LOCAL_APP,0",
+                p->device_serial[0] ? p->device_serial : "UNAVAILABLE");
         } else if (what != NULL &&
                    (!strcmp(what, "HARDWARE") || !strcmp(what, "HW"))) {
             n=snprintf(body,sizeof(body),
