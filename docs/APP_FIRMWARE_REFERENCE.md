@@ -304,6 +304,12 @@ HARDWARE menyatakan kemampuan PCB, bukan bukti modul terpasang.
 
     MODULES,1,installedMask,activeMask,observedMask,faultMask,coreProfile
 
+Model modul adalah **komposisi bit independen**, bukan satu pilihan enum.
+Core tidak mempunyai bit karena selalu tersedia. SIDE, THERMAL, OEM_LEARN,
+AUX, dan TPS_DIAG dapat dipasang serta dikonfigurasi bersamaan. Aplikasi wajib
+memakai operasi bit untuk setiap modul dan tidak boleh membuat pilihan radio
+yang hanya mengizinkan satu modul.
+
 | Bit | Nilai | Modul |
 |---:|---:|---|
 | 0 | 1 | SIDE/coil kedua |
@@ -319,11 +325,31 @@ HARDWARE menyatakan kemampuan PCB, bukan bukti modul terpasang.
 
 observed=0 bukan otomatis rusak. SIDE saat HV mati ditampilkan “Belum diuji”.
 
+Contoh decoding installedMask:
+
+| installedMask | Modul terpasang di atas Core |
+|---:|---|
+| 0 | Tidak ada modul opsional |
+| 1 | SIDE |
+| 2 | THERMAL |
+| 3 | SIDE + THERMAL |
+| 13 | SIDE + OEM_LEARN + AUX |
+| 31 | SIDE + THERMAL + OEM_LEARN + AUX + TPS_DIAG |
+
+Nilai kombinasi diperoleh dengan OR/penjumlahan bit. Jangan membuat daftar
+kombinasi tetap karena seluruh kombinasi 0–31 sah secara format. Validitas
+operasional tetap ditentukan oleh dependensi masing-masing modul.
+
 | coreProfile | Label |
 |---:|---|
 | 0 | IgniTra Core • 1 Coil |
 | 1 | IgniTra Core + SIDE • Dual Coil, belum aktif |
 | 2 | IgniTra Core + SIDE • Dual Coil |
+
+coreProfile hanya menjelaskan profil output pengapian Core/SIDE. Field ini
+tidak merangkum THERMAL, OEM_LEARN, AUX, atau TPS_DIAG. Contoh:
+coreProfile=2 dan installedMask=31 berarti Dual Coil dengan seluruh modul
+opsional terpasang.
 
 ### COMMISSION
 
@@ -536,6 +562,11 @@ OEM Learn hanya menu lanjutan:
 Syarat: RPM 0, HV tidak aktif, HVC/HVS <30 V. Setelah ACK, query ulang
 MODULES, SETUP, TEMP, dan STATUS.
 
+Konfigurasi modul di aplikasi harus berupa lima switch/checkbox independen.
+Mengaktifkan THERMAL tidak boleh mematikan SIDE; mengaktifkan OEM_LEARN tidak
+boleh menghapus AUX atau TPS_DIAG. Pilihan Core/Dual berada di bagian profil
+pengapian, terpisah dari daftar modul.
+
 | Kondisi | UI |
 |---|---|
 | Core saja | HV Core/Center — J1.12 |
@@ -546,9 +577,25 @@ MODULES, SETUP, TEMP, dan STATUS.
 | THERMAL installed, valid=1 | Suhu, mode fan, ambang, relay |
 | OEM_LEARN tidak installed | Sembunyikan OEM Learn |
 | AUX tidak installed | Sembunyikan strobe/AUX |
+| TPS_DIAG installed | Tampilkan TPS raw, reference, range, dan status diagnosis |
+| Semua modul installed | Tampilkan SIDE, THERMAL, OEM Learn, AUX, dan TPS Diagnostic sekaligus |
 
 Nama CENTER Cap dan SIDE Cap lama diganti menjadi HV Core/Center (J1.12) dan
 HV Side (J1.6). Jangan menyimpulkan modul dari tipe motor.
+
+### Dependensi modul
+
+| Modul | Dapat berdampingan | Syarat sebelum dinyatakan siap |
+|---|---|---|
+| SIDE | Semua modul | Dual dipilih, coil J1.6 dipasang, offset valid |
+| THERMAL | Semua modul | Sensor valid; kalibrasi diperlukan untuk nilai akurat/AUTO |
+| OEM_LEARN | Semua modul | Hardware isolator terpasang; sesi learn hanya dari menu lanjutan |
+| AUX | Semua modul | Hardware output yang sesuai terpasang; audio tetap reserved |
+| TPS_DIAG | Semua modul | Jalur reference/signal terpasang dan rentang dapat dibaca |
+
+installed, active, observed, dan fault ditampilkan per modul. Satu modul fault
+tidak boleh membuat aplikasi menyembunyikan atau menonaktifkan status modul
+lain yang sehat.
 
 ---
 
