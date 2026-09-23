@@ -1,6 +1,6 @@
 # IgniTra CDI ESP32 R9 Modular
 
-Firmware ESP-IDF untuk PCB IgniTra CDI berbasis ESP32-WROOM-32 DevKit 38-pin. Desain dasar menjalankan satu kanal pengapian CENTER; kanal SIDE, thermal/fan, OEM Learn, AUX, dan TPS diagnostic dipasang sebagai modul opsional.
+Firmware ESP-IDF untuk PCB IgniTra CDI berbasis ESP32-WROOM-32 DevKit 38-pin. Desain dasar menjalankan satu kanal pengapian CENTER; kanal SIDE, thermal/fan, OEM Learn, AUX, dan TPS diagnostic dipasang sebagai modul opsional. Semua modul opsional menggunakan bit konfigurasi independen dan dapat dipasang bersamaan; pilihan Core/Dual hanya menentukan kanal pengapian, bukan membatasi modul lain.
 
 Firmware mempertahankan protokol aplikasi lama sambil menambahkan informasi hardware modular secara additive. Tidak ada UUID BLE, ukuran paket telemetri, atau perintah lama yang diubah.
 
