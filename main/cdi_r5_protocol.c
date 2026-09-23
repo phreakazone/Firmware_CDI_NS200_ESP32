@@ -108,6 +108,124 @@ static bool persist_store(cdi_r5_protocol_t *p)
     return false;
 }
 
+static uint8_t module_active_mask(const cdi_r5_protocol_t *p)
+{
+    uint8_t mask = 0u;
+    uint8_t installed = cdi_r9_effective_module_mask(p->store);
+    const cdi_r7_setup_t *s = &p->store->setup;
+    if (s->side_enabled) mask |= CDI_R9_MODULE_SIDE;
+    if (s->fan_mode != CDI_R7_FAN_OFF) mask |= CDI_R9_MODULE_THERMAL;
+    if (s->operating_mode == CDI_R8_OP_OEM_LEARN)
+        mask |= CDI_R9_MODULE_OEM_LEARN;
+    if (p->strobe_active) mask |= CDI_R9_MODULE_AUX;
+    return mask & installed;
+}
+
+static uint8_t module_observed_mask(const cdi_r5_protocol_t *p)
+{
+    uint8_t mask = 0u;
+    if (p->hv_side >= 30u) mask |= CDI_R9_MODULE_SIDE;
+    if (p->temperature_valid) mask |= CDI_R9_MODULE_THERMAL;
+    if (p->oem_learner != NULL &&
+        (p->oem_learner->profile.accepted_pulses != 0u ||
+         p->oem_learner->profile.side_samples != 0u))
+        mask |= CDI_R9_MODULE_OEM_LEARN;
+    if (p->tps_ref_raw > 50u && p->tps_ref_raw < 4045u)
+        mask |= CDI_R9_MODULE_TPS_DIAG;
+    return mask;
+}
+
+static uint8_t module_fault_mask(const cdi_r5_protocol_t *p)
+{
+    uint8_t mask = 0u;
+    uint8_t installed = cdi_r9_effective_module_mask(p->store);
+    if ((installed & CDI_R9_MODULE_SIDE) && p->store->setup.side_enabled &&
+        p->hardware_fault)
+        mask |= CDI_R9_MODULE_SIDE;
+    if ((installed & CDI_R9_MODULE_THERMAL) &&
+        p->store->setup.fan_mode == CDI_R7_FAN_AUTO &&
+        !p->temperature_valid)
+        mask |= CDI_R9_MODULE_THERMAL;
+    return mask;
+}
+
+static unsigned commission_next(const cdi_r5_protocol_t *p)
+{
+    const cdi_r7_setup_t *s = &p->store->setup;
+    if (s->operating_mode == CDI_R8_OP_OEM_LEARN) return 8u; /* ADVANCED_OEM */
+    if (s->operating_mode != CDI_R8_OP_DIY || !s->diy_oem_unplug_confirmed)
+        return 1u; /* INSTALL */
+    if (s->stage < CDI_R7_STAGE_PICKUP_OK) return 2u; /* PICKUP */
+    if (s->stage < CDI_R7_STAGE_TDC_SAVED) return 3u; /* TDC */
+    if (s->tps_open_adc <= s->tps_closed_adc + 50u) return 4u; /* TPS */
+    if (!s->first_start_proven) return 5u; /* FIRST_START */
+    if (s->stage < CDI_R7_STAGE_READY) return 6u; /* CONFIRM_READY */
+    return 7u; /* READY */
+}
+
+static unsigned commission_advisory_mask(const cdi_r5_protocol_t *p)
+{
+    const cdi_r7_setup_t *s = &p->store->setup;
+    uint8_t modules = cdi_r9_effective_module_mask(p->store);
+    unsigned mask = 0u;
+    if (s->stage < CDI_R7_STAGE_PICKUP_OK) mask |= 1u << 0;
+    if (s->stage < CDI_R7_STAGE_TDC_SAVED) mask |= 1u << 1;
+    if (s->tps_open_adc <= s->tps_closed_adc + 50u) mask |= 1u << 2;
+    if (!s->first_start_proven) mask |= 1u << 3;
+    if ((modules & CDI_R9_MODULE_SIDE) && !s->side_enabled)
+        mask |= 1u << 4;
+    if ((modules & CDI_R9_MODULE_THERMAL) && !p->temperature_valid)
+        mask |= 1u << 5;
+    return mask;
+}
+
+static bool module_from_name(const char *name, uint8_t *bit)
+{
+    if (name == NULL || bit == NULL) return false;
+    if (!strcmp(name, "SIDE")) *bit = CDI_R9_MODULE_SIDE;
+    else if (!strcmp(name, "THERMAL")) *bit = CDI_R9_MODULE_THERMAL;
+    else if (!strcmp(name, "OEM_LEARN")) *bit = CDI_R9_MODULE_OEM_LEARN;
+    else if (!strcmp(name, "AUX")) *bit = CDI_R9_MODULE_AUX;
+    else if (!strcmp(name, "TPS_DIAG")) *bit = CDI_R9_MODULE_TPS_DIAG;
+    else return false;
+    return true;
+}
+
+static size_t handle_module(cdi_r5_protocol_t *p, unsigned long seq, char **save,
+                            char *out, size_t out_size)
+{
+    const char *op = strtok_r(NULL, ",", save);
+    const char *name = strtok_r(NULL, ",", save);
+    const char *value = strtok_r(NULL, ",", save);
+    cdi_r7_setup_t old;
+    uint8_t bit;
+    bool enabled;
+    if (op == NULL || strcmp(op, "SET") || !module_from_name(name, &bit) ||
+        value == NULL || (strcmp(value, "ON") && strcmp(value, "OFF")))
+        return error_frame(seq, "MODULE_COMMAND", out, out_size);
+    if (!setup_can_write(p))
+        return error_frame(seq, "STOP_ENGINE_WAIT_HV_LT30", out, out_size);
+    enabled = !strcmp(value, "ON");
+    old = p->store->setup;
+    p->store->setup.installed_modules |= CDI_R9_MODULE_CONFIG_VALID;
+    if (enabled) p->store->setup.installed_modules |= bit;
+    else p->store->setup.installed_modules &= (uint8_t)~bit;
+    if (!enabled && bit == CDI_R9_MODULE_SIDE)
+        p->store->setup.side_enabled = 0u;
+    if (!enabled && bit == CDI_R9_MODULE_THERMAL)
+        p->store->setup.fan_mode = CDI_R7_FAN_OFF;
+    if (!enabled && bit == CDI_R9_MODULE_OEM_LEARN &&
+        p->store->setup.operating_mode == CDI_R8_OP_OEM_LEARN)
+        p->store->setup.operating_mode = CDI_R8_OP_MANUAL_SETUP;
+    if (!enabled && bit == CDI_R9_MODULE_AUX) p->strobe_active = false;
+    if (!persist_store(p)) {
+        p->store->setup = old;
+        return error_frame(seq, "FLASH", out, out_size);
+    }
+    return make_frame(seq, enabled ? "ACK,MODULE_ON" : "ACK,MODULE_OFF",
+                      out, out_size);
+}
+
 static size_t handle_mode(cdi_r5_protocol_t *p, unsigned long seq, char **save,
                           char *out, size_t out_size)
 {
@@ -213,6 +331,32 @@ static size_t handle_setup(cdi_r5_protocol_t *p, unsigned long seq, char **save,
     unsigned long a;
     cdi_r7_setup_t old;
     if (!op) return error_frame(seq, "SETUP_COMMAND", out, out_size);
+    if (!strcmp(op, "INSTALL")) {
+        const char *hardware = strtok_r(NULL, ",", save);
+        const char *confirm = strtok_r(NULL, ",", save);
+        bool dual;
+        if (!setup_can_write(p))
+            return error_frame(seq, "STOP_ENGINE_WAIT_HV_LT30", out, out_size);
+        if (hardware == NULL || confirm == NULL || strcmp(confirm, "OEM_REMOVED") ||
+            (strcmp(hardware, "CORE") && strcmp(hardware, "DUAL")))
+            return error_frame(seq, "INSTALL_CORE_OR_DUAL_OEM_REMOVED", out, out_size);
+        dual = !strcmp(hardware, "DUAL");
+        old = p->store->setup;
+        p->store->setup.installed_modules |= CDI_R9_MODULE_CONFIG_VALID;
+        p->store->setup.operating_mode = CDI_R8_OP_DIY;
+        p->store->setup.diy_oem_unplug_confirmed = 1u;
+        p->store->setup.center_enabled = 0u;
+        p->store->setup.side_enabled = 0u;
+        if (dual) p->store->setup.installed_modules |= CDI_R9_MODULE_SIDE;
+        else p->store->setup.installed_modules &= (uint8_t)~CDI_R9_MODULE_SIDE;
+        p->strobe_active = false;
+        if (!persist_store(p)) {
+            p->store->setup = old;
+            return error_frame(seq, "FLASH", out, out_size);
+        }
+        return make_frame(seq, dual ? "ACK,INSTALL_DUAL" : "ACK,INSTALL_CORE",
+                          out, out_size);
+    }
     if (!strcmp(op,"PICKUP")) {
         const char *x=strtok_r(NULL,",",save);
         if (!x || strcmp(x,"CONFIRM")) return error_frame(seq,"PICKUP_COMMAND",out,out_size);
@@ -294,7 +438,7 @@ static size_t handle_setup(cdi_r5_protocol_t *p, unsigned long seq, char **save,
             p->store->setup.first_start_proven!=0u;
         if (!setup_can_write(p)||!first_proven) return error_frame(seq,"FIRST_START_NOT_PROVEN",out,out_size);
         old=p->store->setup; p->store->setup.stage=CDI_R7_STAGE_READY; p->store->setup.center_enabled=1; p->store->setup.side_enabled=0;
-        if (x&&!strcmp(x,"THREE")){const char *s=strtok_r(NULL,",",save); if(!s){p->store->setup=old;return error_frame(seq,"SIDE_OFFSET",out,out_size);} side=strtol(s,&end,10); if(*end||side< -3000||side>3000){p->store->setup=old;return error_frame(seq,"SIDE_OFFSET",out,out_size);} p->store->setup.side_offset_cdeg=(int16_t)side;p->store->setup.side_enabled=1;}
+        if (x&&(!strcmp(x,"THREE")||!strcmp(x,"DUAL"))){const char *s=strtok_r(NULL,",",save); if(!(cdi_r9_effective_module_mask(p->store)&CDI_R9_MODULE_SIDE)){p->store->setup=old;return error_frame(seq,"SIDE_MODULE_NOT_CONFIGURED",out,out_size);} if(!s){p->store->setup=old;return error_frame(seq,"SIDE_OFFSET",out,out_size);} side=strtol(s,&end,10); if(*end||side< -3000||side>3000){p->store->setup=old;return error_frame(seq,"SIDE_OFFSET",out,out_size);} p->store->setup.side_offset_cdeg=(int16_t)side;p->store->setup.side_enabled=1;}
         else if (!x||strcmp(x,"CENTER")){p->store->setup=old;return error_frame(seq,"READY_MODE",out,out_size);}
         if (!persist_store(p)){p->store->setup=old; return error_frame(seq,"FLASH",out,out_size);}
         return make_frame(seq,p->store->setup.side_enabled?"ACK,READY_THREE":"ACK,READY_CENTER",out,out_size);
@@ -599,7 +743,7 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->tps_closed_adc,s->tps_open_adc,s->first_start_hv_volts,s->center_enabled,s->side_enabled,s->fan_mode,p->pickup_quality);
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
-                "CAPS,5,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START");
+                "CAPS,5,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START,MODULE_STATUS,QUICK_INSTALL");
         } else if (what != NULL && strcmp(what, "INFO") == 0) {
             /* Additive query: existing commands/UUID/telemetry remain unchanged. */
             n=snprintf(body,sizeof(body),
@@ -608,6 +752,20 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                    (!strcmp(what, "HARDWARE") || !strcmp(what, "HW"))) {
             n=snprintf(body,sizeof(body),
                 "HARDWARE,1,CENTER_BASE,SIDE_OPTIONAL,THERMAL_OPTIONAL,OEM_LEARN_OPTIONAL,AUX_OPTIONAL,TPS_DIAG_OPTIONAL");
+        } else if (what != NULL && strcmp(what, "MODULES") == 0) {
+            uint8_t installed = cdi_r9_effective_module_mask(p->store);
+            uint8_t active = module_active_mask(p);
+            uint8_t observed = module_observed_mask(p);
+            uint8_t fault = module_fault_mask(p);
+            unsigned core = (installed & CDI_R9_MODULE_SIDE) ?
+                (p->store->setup.side_enabled ? 2u : 1u) : 0u;
+            n=snprintf(body,sizeof(body),"MODULES,1,%u,%u,%u,%u,%u",
+                installed,active,observed,fault,core);
+        } else if (what != NULL && strcmp(what, "COMMISSION") == 0) {
+            n=snprintf(body,sizeof(body),"COMMISSION,1,%u,%u,%u,%u",
+                p->store->setup.stage,commission_next(p),
+                p->store->setup.stage==CDI_R7_STAGE_READY?1u:0u,
+                commission_advisory_mask(p));
         } else if (what != NULL && strcmp(what, "ADC") == 0) {
             n=snprintf(body,sizeof(body),"ADC,%u,%u,%u,%u,%u,%u,%u,%u",
                 p->tps_raw,p->temp_raw,p->tps_ref_raw,p->hv_center,p->hv_side,
@@ -679,6 +837,7 @@ if (strcmp(cmd,"MAP")==0) {
     if (strcmp(cmd,"TEMP")==0) return handle_r9_temp(p,seq,&save,response,response_size);
     if (strcmp(cmd,"DYNO")==0) return handle_r9_dyno(p,seq,&save,response,response_size);
     if (strcmp(cmd,"SETUP")==0) return handle_setup(p,seq,&save,response,response_size);
+    if (strcmp(cmd,"MODULE")==0) return handle_module(p,seq,&save,response,response_size);
     if (strcmp(cmd,"MODE")==0) return handle_mode(p,seq,&save,response,response_size);
     if (strcmp(cmd,"LEARN")==0) return handle_learn(p,seq,&save,response,response_size);
 

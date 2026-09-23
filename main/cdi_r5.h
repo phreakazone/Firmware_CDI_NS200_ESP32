@@ -18,6 +18,18 @@
 #define CDI_R7_SETUP_MAGIC 0x37505553u
 #define CDI_R7_SETUP_VERSION 3u
 
+/* Modul fisik opsional. CORE/CENTER selalu ada sehingga tidak memakai bit. */
+enum {
+    CDI_R9_MODULE_SIDE       = 1u << 0,
+    CDI_R9_MODULE_THERMAL    = 1u << 1,
+    CDI_R9_MODULE_OEM_LEARN  = 1u << 2,
+    CDI_R9_MODULE_AUX        = 1u << 3,
+    CDI_R9_MODULE_TPS_DIAG   = 1u << 4,
+    CDI_R9_MODULE_ALL        = (1u << 5) - 1u,
+    /* Marker internal: membedakan pilihan eksplisit NONE dari blob R9 lama. */
+    CDI_R9_MODULE_CONFIG_VALID = 1u << 7
+};
+
 typedef enum { CDI_R5_MODE_NORMAL = 0, CDI_R5_MODE_PRO = 1 } cdi_r5_mode_t;
 typedef enum { CDI_R5_LIMITER_SOFT = 0, CDI_R5_LIMITER_HARD = 1 } cdi_r5_limiter_t;
 typedef enum {
@@ -65,7 +77,9 @@ typedef struct {
     uint16_t first_start_hv_volts, first_start_rpm_limit;
     uint16_t first_start_advance_cap_cdeg;
     uint8_t center_enabled, side_enabled, fan_mode, operating_mode;
-    uint8_t pro_enabled, diy_oem_unplug_confirmed, first_start_proven, reserved;
+    uint8_t pro_enabled, diy_oem_unplug_confirmed, first_start_proven;
+    /* Menggunakan byte reserved lama agar ukuran blob NVS/schema tetap sama. */
+    uint8_t installed_modules;
     char profile_name[CDI_R5_NAME_LEN];
     uint16_t profile_rpm_min, profile_rpm_max;
     int16_t profile_advance_min_cdeg, profile_advance_max_cdeg;
@@ -136,5 +150,6 @@ bool cdi_r9_temperature_from_adc(const cdi_r7_setup_t *setup, uint16_t adc,
                                  int16_t *temperature_cdeg);
 bool cdi_r9_fan_update(const cdi_r7_setup_t *setup, int16_t temperature_cdeg,
                        bool temperature_valid, bool previous_output);
+uint8_t cdi_r9_effective_module_mask(const cdi_r5_store_image_t *image);
 
 #endif

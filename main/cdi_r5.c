@@ -95,6 +95,7 @@ void cdi_r5_load_defaults(cdi_r5_store_image_t *image)
         .first_start_advance_cap_cdeg=1000u, .fan_mode=CDI_R7_FAN_ON,
         .operating_mode=CDI_R8_OP_MANUAL_SETUP, .pro_enabled=1u,
         .diy_oem_unplug_confirmed=0u, .first_start_proven=0u,
+        .installed_modules=CDI_R9_MODULE_CONFIG_VALID,
         .profile_name="UNIVERSAL", .profile_rpm_min=300u,
         .profile_rpm_max=CDI_R5_ABSOLUTE_RPM_CAP,
         .profile_advance_min_cdeg=CDI_R9_ADVANCE_MIN_CDEG,
@@ -127,6 +128,8 @@ cdi_r5_status_t cdi_r7_setup_validate(const cdi_r7_setup_t *s)
         s->side_enabled > 1u || s->fan_mode > CDI_R7_FAN_AUTO ||
         s->operating_mode > CDI_R8_OP_DIY || s->pro_enabled > 1u ||
         s->diy_oem_unplug_confirmed > 1u || s->first_start_proven > 1u ||
+        (s->installed_modules &
+         (uint8_t)~(CDI_R9_MODULE_ALL | CDI_R9_MODULE_CONFIG_VALID)) != 0u ||
         s->profile_name[CDI_R5_NAME_LEN - 1u] != '\0' ||
         s->profile_rpm_min < 100u ||
         s->profile_rpm_min >= s->profile_rpm_max ||
@@ -150,6 +153,31 @@ cdi_r5_status_t cdi_r7_setup_validate(const cdi_r7_setup_t *s)
     if (s->side_enabled && !s->center_enabled) return CDI_R5_ERR_MAP;
     if (s->stage == CDI_R7_STAGE_READY && !s->center_enabled) return CDI_R5_ERR_MAP;
     return CDI_R5_OK;
+}
+
+uint8_t cdi_r9_effective_module_mask(const cdi_r5_store_image_t *image)
+{
+    uint8_t mask;
+    bool temp_calibrated;
+    if (image == NULL) return 0u;
+    mask = image->setup.installed_modules & CDI_R9_MODULE_ALL;
+    if (image->setup.installed_modules & CDI_R9_MODULE_CONFIG_VALID)
+        return mask;
+
+    /* Migrasi lunak untuk konfigurasi R9 yang disimpan sebelum byte reserved
+     * diberi arti. Tidak mengubah ukuran blob atau versi schema NVS. */
+    if (image->setup.side_enabled ||
+        (image->oem_profile.valid && image->oem_profile.side_samples >= 10u))
+        mask |= CDI_R9_MODULE_SIDE;
+    temp_calibrated = image->setup.temp_adc[0] != 0u ||
+                      image->setup.temp_adc[1] != 0u ||
+                      image->setup.temp_adc[2] != 0u;
+    if (temp_calibrated || image->setup.fan_mode == CDI_R7_FAN_AUTO)
+        mask |= CDI_R9_MODULE_THERMAL;
+    if (image->setup.operating_mode == CDI_R8_OP_OEM_LEARN ||
+        image->oem_profile.valid)
+        mask |= CDI_R9_MODULE_OEM_LEARN;
+    return mask;
 }
 
 static bool axis_valid(const uint16_t *axis, uint8_t count, uint16_t max)

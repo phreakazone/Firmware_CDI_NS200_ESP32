@@ -20,6 +20,7 @@ Entry point build adalah `main/main.c`. Berkas aktif melalui `main/CMakeLists.tx
 `main/cdi_firmware.c` dan `main/cdi_firmware.h` adalah eksperimen portable lama dan **tidak ikut dikompilasi**. Developer tidak boleh memakai keduanya sebagai referensi aplikasi atau hardware.
 
 Referensi aplikasi lengkap: [docs/APP_FIRMWARE_REFERENCE.md](docs/APP_FIRMWARE_REFERENCE.md).
+Buku petunjuk produk: [docs/BUKU_PETUNJUK_PENGGUNA.md](docs/BUKU_PETUNJUK_PENGGUNA.md).
 
 ## Kontrak pin ESP32 dan skematik
 
@@ -157,6 +158,9 @@ Tambahan untuk aplikasi baru:
 - `GET,INFO`
 - `GET,HARDWARE` atau `GET,HW`
 - `GET,ADC`
+- `GET,MODULES` untuk konfigurasi, aktivitas, bukti sinyal dan fault modul.
+- `GET,COMMISSION` untuk menentukan langkah setup berikutnya.
+- `SETUP,INSTALL,CORE|DUAL,OEM_REMOVED` untuk ganti CDI OEM langsung.
 
 `GET,TEMP` sekarang membaca status suhu/fan aktual yang sama dengan telemetri.
 
@@ -172,13 +176,18 @@ Jika `sdkconfig.defaults` diubah dan konfigurasi lama masih tersimpan, lakukan k
 
 ## Setup minimum
 
-1. Pastikan output gate, strobe, fan dan audio LOW saat boot.
-2. Validasi `PICKUP_DIG`, pilih falling/rising edge, lalu simpan pickup.
-3. Kalibrasi TDC memakai strobe atau `MANUAL_TDC` dengan pengukuran nyata.
+Setup pengguna terdiri dari **Pemasangan**, **Pemeriksaan**, dan **First
+Start/Ready**. OEM Learn tidak diperlukan untuk pemasangan normal.
+
+1. Lepas CDI OEM, pasang IgniTra, lalu pilih Core atau Dual memakai
+   `SETUP,INSTALL,CORE|DUAL,OEM_REMOVED`.
+2. Starter untuk membaca pickup; setelah RPM nol dan HV <30 V, simpan pickup.
+3. Kalibrasi TDC nyata. Nilai UNIVERSAL bukan preset kendaraan.
 4. Kalibrasi TPS CLOSED dan OPEN.
-5. Untuk CENTER-only pilih READY CENTER.
-6. Untuk NS200 dual-coil/3 busi, pasang modul SIDE dan gunakan hasil OEM Learn atau offset SIDE yang telah diukur sebelum READY THREE.
-7. Kalibrasi sensor suhu sebelum FAN AUTO. FAN ON dapat dipakai untuk uji relay.
+5. Jalankan FIRST START; firmware membatasi 3.000 RPM dan advance 10°.
+6. Setelah mesin dimatikan, pilih READY CENTER.
+7. Dual Coil memerlukan modul SIDE dan offset valid sebelum READY DUAL/THREE.
+8. Kalibrasi suhu sebelum FAN AUTO.
 
 Panduan bench test berada di [main/INSTRUKSI.md](main/INSTRUKSI.md). `BENCH_TEST_MODE` harus `0` dan self-test loopback harus dilepas untuk pemasangan kendaraan.
 

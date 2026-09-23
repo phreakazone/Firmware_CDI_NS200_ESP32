@@ -336,7 +336,9 @@ void cdi_engine_init(void)
         store.setup.first_start_proven = 1u;
         store.setup.stage = CDI_R7_STAGE_READY;
         store.setup.center_enabled = 1u;
-        store.setup.side_enabled = store.oem_profile.valid && store.oem_profile.side_samples >= 10u;
+        store.setup.side_enabled =
+            (cdi_r9_effective_module_mask(&store) & CDI_R9_MODULE_SIDE) &&
+            store.oem_profile.valid && store.oem_profile.side_samples >= 10u;
         cdi_r5_store_seal(&store);
         (void)nvs_save_store(&store);
         (void)nvs_fsproof_clear();
@@ -430,7 +432,11 @@ void cdi_engine_tick_1ms(void)
     int16_t temperature_cdeg = 0;
     bool temperature_valid = cdi_r9_temperature_from_adc(&store.setup,
         cdi_board_adc_raw(CDI_ADC_IDX_TEMP), &temperature_cdeg);
-    s_fan_on = cdi_r9_fan_update(&store.setup, temperature_cdeg, temperature_valid, s_fan_on);
+    bool thermal_configured =
+        (cdi_r9_effective_module_mask(&store) & CDI_R9_MODULE_THERMAL) != 0u;
+    s_fan_on = thermal_configured ?
+        cdi_r9_fan_update(&store.setup, temperature_cdeg,
+                          temperature_valid, s_fan_on) : false;
     cdi_board_set_fan(s_fan_on);
     protocol.temp_raw = cdi_board_adc_raw(CDI_ADC_IDX_TEMP);
     protocol.tps_ref_raw = cdi_board_adc_raw(CDI_ADC_IDX_TPS_REF);
@@ -454,7 +460,9 @@ void cdi_engine_tick_1ms(void)
     if (store.setup.stage == CDI_R7_STAGE_FIRST_START && store.setup.first_start_proven &&
         protocol.rpm == 0u && protocol.hv_center < 30u && protocol.hv_side < 30u) {
         store.setup.stage = CDI_R7_STAGE_READY; store.setup.center_enabled = 1u;
-        store.setup.side_enabled = store.oem_profile.valid && store.oem_profile.side_samples >= 10u;
+        store.setup.side_enabled =
+            (cdi_r9_effective_module_mask(&store) & CDI_R9_MODULE_SIDE) &&
+            store.oem_profile.valid && store.oem_profile.side_samples >= 10u;
         cdi_r5_store_seal(&store);
         if (nvs_save_store(&store)) (void)nvs_fsproof_clear();
     }

@@ -1,47 +1,71 @@
 # Referensi Firmware untuk Developer Aplikasi
 
-Dokumen ini adalah kontrak integrasi aplikasi untuk firmware ESP32 IgniTra CDI R9 Modular. Implementasi yang aktif berada pada `main/cdi_engine_esp32.c`, `main/cdi_r5_protocol.c`, `main/cdi_r5_ble.c`, dan `main/cdi_ble_nimble.c`.
+Dokumen ini adalah kontrak integrasi aplikasi untuk **IgniTra CDI ESP32 R9
+Modular**. Sumber aktif berada pada `main/cdi_engine_esp32.c`,
+`main/cdi_r5_protocol.c`, `main/cdi_r5_ble.c`, dan `main/cdi_ble_nimble.c`.
+`main/cdi_firmware.*` tidak ikut dikompilasi dan bukan referensi implementasi.
 
-## Identitas dan kompatibilitas
+## 1. Prinsip integrasi
+
+1. CORE selalu tersedia dan berarti satu kanal pengapian pada
+   `J1.12/COIL_CENTER`.
+2. Kanal kedua berasal dari modul SIDE dan keluar melalui
+   `J1.6/COIL_SIDE`.
+3. Firmware tidak memiliki pin identifikasi modul. Status **terpasang** adalah
+   konfigurasi pilihan pengguna, bukan deteksi fisik otomatis.
+4. Aplikasi wajib membedakan `configured`, `active`, `observed`, dan `fault`.
+5. Setup normal adalah **Ganti CDI OEM**, bukan OEM Learn.
+6. UUID, paket BLE v3 20 byte, dan perintah lama tetap dipertahankan.
+
+## 2. Identitas dan kompatibilitas
 
 | Item | Nilai |
 |---|---|
 | Platform | ESP32 klasik/WROOM-32 |
-| Generasi firmware | R9 |
+| Generasi | R9 |
 | Protokol perintah | 5 |
-| Paket BLE | versi 3, 20 byte |
-| Nama advertising lama | `NS200-CDI` |
-| Jumlah map | 4 |
+| Paket BLE | Versi 3, 20 byte |
+| Advertising lama | `NS200-CDI` |
+| Map | 4 slot |
 | Grid maksimum | 32 RPM × 16 TPS |
 | RPM format maksimum | 30.000 |
 | Advance format | -30,0° sampai +80,0° |
+| Schema NVS | 5, ukuran blob tidak berubah |
 
-Kompatibilitas lama sengaja dipertahankan:
+Tambahan ini bersifat additive: `GET,MODULES`, `GET,COMMISSION`,
+`MODULE,SET,...`, `SETUP,INSTALL,...`, serta alias `SETUP,READY,DUAL,...`.
+Aplikasi lama tetap dapat memakai query dan perintah sebelumnya.
 
-- UUID BLE tidak berubah.
-- Nama advertising tidak berubah.
-- Paket telemetri tetap versi 3 dan panjangnya tetap 20 byte.
-- Format frame ASCII dan CRC16 tidak berubah.
-- Perintah lama tidak dihapus atau diganti nama.
-- Schema NVS aktif tetap `CDI_R5_STORE_VERSION = 5`.
-- `GET,INFO`, `GET,HARDWARE`/`GET,HW`, dan `GET,ADC` hanya tambahan.
+## 3. Urutan koneksi aplikasi
 
-Saat koneksi baru, aplikasi disarankan mengirim `PING`, kemudian `GET,INFO`, `GET,CAPS`, `GET,SETUP`, dan `GET,META`. Jika firmware lama menjawab `ERR,GET` untuk query tambahan, aplikasi harus melanjutkan memakai kemampuan lama.
+Setelah BLE tersambung, kirim:
 
-## BLE GATT
+1. `PING`
+2. `GET,INFO`
+3. `GET,CAPS`
+4. `GET,HARDWARE`
+5. `GET,MODULES`
+6. `GET,COMMISSION`
+7. `GET,SETUP`
+8. `GET,META`
+
+Jika firmware lama menjawab `ERR,GET` pada `MODULES` atau `COMMISSION`, kembali
+ke perilaku lama dan jangan memutus koneksi.
+
+## 4. BLE GATT
 
 | Fungsi | UUID | Properti |
 |---|---|---|
-| Service | `7a8f1000-6c9d-4e40-a45f-0b4b4e533230` | Primary service |
+| Service | `7a8f1000-6c9d-4e40-a45f-0b4b4e533230` | Primary |
 | Telemetry | `7a8f1001-6c9d-4e40-a45f-0b4b4e533230` | Notify |
 | Command | `7a8f1002-6c9d-4e40-a45f-0b4b4e533230` | Write |
 | Response | `7a8f1003-6c9d-4e40-a45f-0b4b4e533230` | Notify |
-| OTA data | `7a8f1004-6c9d-4e40-a45f-0b4b4e533230` | Write, Write Without Response |
+| OTA data | `7a8f1004-6c9d-4e40-a45f-0b4b4e533230` | Write/No Response |
 | OTA status | `7a8f1005-6c9d-4e40-a45f-0b4b4e533230` | Notify |
 
-Semua integer multibyte pada paket biner memakai little-endian.
+Semua integer multibyte paket biner memakai little-endian.
 
-### Paket telemetri 20 byte
+## 5. Paket telemetri lama
 
 Header bersama:
 
@@ -49,134 +73,223 @@ Header bersama:
 |---:|---:|---|
 | 0 | 2 | Magic `0xCD15` |
 | 2 | 1 | Versi `3` |
-| 3 | 1 | Kind: `0=CORE`, `1=DIAGNOSTIC` |
+| 3 | 1 | `0=CORE`, `1=DIAGNOSTIC` |
 | 4 | 2 | Sequence |
-| 18 | 2 | CRC16-CCITT atas byte 0–17 |
+| 18 | 2 | CRC16-CCITT byte 0–17 |
 
 Kind CORE:
 
-| Offset | Tipe | Isi/satuan |
+| Offset | Tipe | Isi |
 |---:|---|---|
 | 6 | `uint16` | RPM |
 | 8 | `uint16` | TPS, 0–1000 permille |
 | 10 | `int16` | Advance, centidegree |
 | 12 | `uint16` | Aki, centivolt |
-| 14 | `uint16` | HV CENTER, volt |
-| 16 | `uint16` | HV SIDE, volt; nol saat modul SIDE tidak dipakai |
+| 14 | `uint16` | HV CORE/CENTER, volt |
+| 16 | `uint16` | HV SIDE, volt; nol bila tidak digunakan |
 
 Kind DIAGNOSTIC:
 
 | Offset | Tipe | Isi |
 |---:|---|---|
-| 6 | `int16` | Suhu centidegree; `INT16_MIN` berarti tidak valid |
-| 8 | `uint8` | Slot map aktif, 0–3 |
-| 9 | `uint8` | Limiter: 0 fire, 1 soft cut, 2 hard cut |
+| 6 | `int16` | Suhu centidegree; `INT16_MIN` tidak valid |
+| 8 | `uint8` | Slot map 0–3 |
+| 9 | `uint8` | 0 fire, 1 soft cut, 2 hard cut |
 | 10 | `uint8` | Flags utama |
 | 11 | `uint8` | Flags output |
 | 12 | `uint16` | Fault bits |
 | 14 | `uint16` | Trigger angle, centidegree |
-| 16 | `uint8` | Pickup quality, 0–100 |
-| 17 | `uint8` | Durasi First Start, detik |
+| 16 | `uint8` | Pickup quality 0–100 |
+| 17 | `uint8` | First Start, detik |
 
-Flags utama: bit 0 output diizinkan, bit 1 PRO, bit 2 HV aktif, bit 3 terkalibrasi, bit 4 BLE terhubung, bit 5 READY, bit 6 FIRST_START.
+Flags output: bit 0 CORE/CENTER, bit 1 SIDE, bit 2 strobe, bit 3 fan. Status
+modul diperoleh melalui `GET,MODULES`; paket 20 byte tidak diubah.
 
-Flags output: bit 0 CENTER, bit 1 SIDE, bit 2 strobe, bit 3 fan.
-
-Fault bits: bit 0 hardware clamp, bit 1 aki, bit 2 HV overvoltage, bit 3 HV imbalance, bit 4 pickup timeout, bit 5 kalibrasi, bit 6 CRC map.
-
-## Frame perintah ASCII
-
-Format:
+## 6. Frame perintah
 
 ```text
 @sequence,COMMAND,arg1,arg2*CRC16\n
 ```
 
-CRC menggunakan CRC16-CCITT polynomial `0x1021`, initial value `0xFFFF`, dihitung atas teks mulai dari `sequence` sampai argumen terakhir, tanpa `@`, `*CRC`, CR, atau LF.
+CRC16-CCITT memakai polynomial `0x1021`, initial `0xFFFF`, dihitung dari
+`sequence` sampai argumen terakhir tanpa `@`, `*CRC`, CR, atau LF.
 
-Respons berhasil berbentuk `@sequence,ACK,...*CRC16`. Respons gagal berbentuk `@sequence,ERR,NAMA*CRC16`.
+## 7. Status modul
 
-## Query utama
-
-| Query | Respons utama |
-|---|---|
-| `PING` | `ACK,PONG_R9` |
-| `GET,INFO` | `INFO,ESP32,R9,5,3,IGNITRA_R9_MODULAR` |
-| `GET,HARDWARE` atau `GET,HW` | Profil PCB dasar dan daftar modul opsional |
-| `GET,CAPS` | Batas format dan fitur firmware |
-| `GET,STATUS` | RPM, TPS, HV C/S, slot, mode map, permission, PRO |
-| `GET,META` | Metadata map aktif |
-| `GET,SETUP` | Tahap setup dan konfigurasi pengapian |
-| `GET,PROFILE` | Profil universal, rentang RPM/advance, PPR, trigger |
-| `GET,TEMP` | Mode fan, ambang, suhu valid, output fan |
-| `GET,ADC` | Raw TPS, suhu, TPS reference, HV C/S, VBAT, fault, fan |
-| `GET,MODE` | Mode operasi dan konfirmasi OEM unplugged |
-| `GET,LEARN` | Progres OEM Learn |
-| `GET,OTA` | Status OTA |
-| `GET,CELL,tpsIndex,rpmIndex` | Nilai sel map dalam centidegree |
-
-Urutan `GET,ADC`:
+Query `GET,MODULES` menghasilkan:
 
 ```text
-ADC,tpsRaw,tempRaw,tpsRefRaw,hvCenterVolt,hvSideVolt,vbatRaw,faultActive,fanOutput
+MODULES,1,installedMask,activeMask,observedMask,faultMask,coreProfile
 ```
 
-## Perintah konfigurasi
+| Bit | Nilai | Modul |
+|---:|---:|---|
+| 0 | 1 | SIDE/kanal coil kedua |
+| 1 | 2 | THERMAL/FAN |
+| 2 | 4 | OEM LEARN |
+| 3 | 8 | AUX/strobe; audio masih reserved |
+| 4 | 16 | TPS DIAGNOSTIC |
 
-Perintah yang menulis konfigurasi umumnya mensyaratkan mesin berhenti dan HV CENTER/SIDE di bawah 30 V.
+| Field | Arti UI |
+|---|---|
+| `installedMask` | Dipilih pengguna sebagai modul yang dipasang |
+| `activeMask` | Sedang diperintah firmware |
+| `observedMask` | Ada bukti sinyal listrik saat ini |
+| `faultMask` | Firmware memiliki alasan spesifik menyatakan bermasalah |
 
-- `SETUP,PICKUP,CONFIRM`
-- `SETUP,EDGE,FALLING|RISING`
-- `SETUP,PPR,1..12`
-- `SETUP,GATE_US,40..150`
-- `SETUP,STROBE,ON|OFF`
-- `SETUP,OFFSET,centidegree`
-- `SETUP,SAVE_TDC`
-- `SETUP,MANUAL_TDC,centidegree,CONFIRM`
-- `SETUP,TPS,CLOSED|OPEN`
-- `SETUP,FIRST_START`
-- `SETUP,READY,CENTER`
-- `SETUP,READY,THREE,sideOffsetCentidegree`
-- `SETUP,FAN,OFF|ON|AUTO` — kompatibilitas lama.
-- `MODE,MANUAL`
-- `MODE,OEM_LEARN`
-- `MODE,DIY,OEM_UNPLUGGED`
-- `LEARN,START|STOP|ABORT`
-- `FEATURE,PRO,ON|OFF`
-- `LIMIT,SOFT|HARD,rpm,softBandRpm` — format lama.
-- `LOAD,slot` dan `SAVE,slot` — format lama.
-- `LIVE,tpsIndex,rpmIndex,advanceCentidegree` — pembaruan sel lama.
+`observed=0` bukan otomatis rusak. Contoh modul SIDE saat HV mati tidak dapat
+dikonfirmasi. Tampilkan `Belum diuji`, bukan `Tidak ada`.
 
-Perintah R9 tambahan:
+| `coreProfile` | Label UI |
+|---:|---|
+| 0 | `IgniTra Core • 1 Coil` |
+| 1 | `IgniTra Core + SIDE • Dual Coil (belum aktif)` |
+| 2 | `IgniTra Core + SIDE • Dual Coil` |
 
-- `MAP,BEGIN,rpmCount,tpsCount`
-- `MAP,RPM,index,rpm`
-- `MAP,LOAD,index,loadPercent`
-- `MAP,CELL,rpmIndex,tpsIndex,advanceX10Degree`
-- `MAP,SAVE,slot`
-- `MAP,SELECT,slot`
-- `SET,LIMIT,rpm`
-- `SET,FAN,OFF|ON|AUTO,onX10Degree,offX10Degree`
-- `SET,PROFILE,name,rpmMin,rpmMax,advanceMinX10,advanceMaxX10,ppr,triggerX10`
-- `TEMP,CAL,adc0,temp0X10,adc1,temp1X10,adc2,temp2X10`
-- `DYNO,BEGIN`
-- `DYNO,TRIM,trimX10Degree`
-- `DYNO,COMMIT|ABORT`
+Konfigurasi modul:
 
-## Kontrak hardware modular yang terlihat oleh aplikasi
+```text
+MODULE,SET,SIDE,ON|OFF
+MODULE,SET,THERMAL,ON|OFF
+MODULE,SET,OEM_LEARN,ON|OFF
+MODULE,SET,AUX,ON|OFF
+MODULE,SET,TPS_DIAG,ON|OFF
+```
 
-- PCB dasar selalu menyediakan satu kanal CENTER.
-- Kanal SIDE bersifat opsional. Jika SIDE tidak aktif, nilai HV SIDE boleh nol dan bukan fault imbalance.
-- Thermal/fan opsional. `GET,TEMP` menandai validitas suhu; AUTO menyalakan fan secara fail-safe ketika kalibrasi/sensor tidak valid.
-- OEM Learn opsional dan memakai input PC817 aktif-rendah.
-- TPS diagnostic opsional hanya memantau `TPS_REF_ADC`; jalur TPS utama tetap berada pada PCB dasar.
-- `AUDIO_PWM` berada di GPIO23 tetapi masih berstatus reserved dan dipaksa LOW. Aplikasi jangan menampilkan kontrol audio sebagai fitur aktif sampai capability baru ditambahkan.
+Mesin harus berhenti dan HV di bawah 30 V. Menonaktifkan SIDE juga mematikan
+output SIDE; menonaktifkan THERMAL mengubah fan menjadi OFF.
 
-## Aturan perubahan berikutnya
+## 8. Dashboard setelah setup
 
-1. Jangan mengubah UUID, paket v3, arti bit, atau perintah lama secara diam-diam.
-2. Tambahkan query/perintah baru secara additive dan sertakan capability.
-3. Jika format paket harus berubah, gunakan nomor versi baru dan tetap terima versi lama selama masa migrasi.
-4. Jangan memakai ADC2 selama BLE aktif.
-5. Setiap perubahan pin harus sekaligus memperbarui `cdi_board_esp32.h`, README, skematik EasyEDA, dan dokumen ini.
-6. Jangan mengaktifkan SIDE hanya berdasarkan model motor; gunakan hasil setup atau OEM Learn yang valid.
+| Kondisi | Kartu/gauge |
+|---|---|
+| Core saja | `HV Core/Center — J1.12` |
+| SIDE dipasang, belum aktif | Tambahkan `HV Side — J1.6`, status `Belum aktif` |
+| SIDE aktif | Tampilkan kedua HV dan status `Dual Coil` |
+| THERMAL tidak dipasang | Sembunyikan suhu dan fan |
+| THERMAL dipasang | Tampilkan suhu, mode fan dan output relay |
+| OEM Learn tidak dipasang | Sembunyikan menu OEM Learn |
+| AUX tidak dipasang | Sembunyikan strobe/audio |
+
+Pin tetap ditulis untuk diagnosis. Nama `CENTER Cap` lama diganti menjadi
+`HV Core/Center (J1.12)` dan `SIDE Cap` menjadi `HV Side (J1.6)`.
+
+## 9. Flow setup aplikasi yang baru
+
+Enam tab lama (`Baru`, `Pulser`, `TDC`, `TPS`, `First Start`, `Ready`) diganti
+menjadi tiga layar. State firmware tetap dipertahankan.
+
+### Layar 1 — Pemasangan
+
+Pilihan:
+
+1. **Ganti CDI OEM — Core 1 Coil** (default).
+2. **Ganti CDI OEM — Dual Coil** jika modul SIDE benar-benar dipasang.
+3. **Setup Lanjutan** untuk OEM Learn atau kalibrasi khusus.
+
+Setelah pengguna mengonfirmasi CDI OEM telah dilepas:
+
+```text
+SETUP,INSTALL,CORE,OEM_REMOVED
+SETUP,INSTALL,DUAL,OEM_REMOVED
+```
+
+Perintah tersebut memilih hardware, masuk ke mode pengganti CDI, menyimpan
+konfirmasi OEM dilepas, dan tetap menahan gate OFF sampai pemeriksaan selesai.
+
+Jangan meminta pengguna normal memilih OEM Learn, Manual, atau DIY sebagai
+tiga pilihan setara. OEM Learn adalah alat lanjutan; Manual berarti output mati
+selama kalibrasi; DIY adalah mode internal ketika IgniTra menggantikan OEM.
+
+### Layar 2 — Pemeriksaan
+
+Tampilkan satu daftar kartu:
+
+1. **Pickup:** starter beberapa detik, lepaskan starter, tunggu RPM nol dan HV
+   <30 V, lalu `SETUP,PICKUP,CONFIRM`.
+2. **TDC:** gunakan strobe dan `SETUP,SAVE_TDC`. Gunakan
+   `SETUP,MANUAL_TDC,...,CONFIRM` hanya untuk nilai terverifikasi. Profil
+   `UNIVERSAL` bukan preset kendaraan.
+3. **TPS:** throttle tertutup `SETUP,TPS,CLOSED`, throttle penuh
+   `SETUP,TPS,OPEN`.
+
+Pickup dan TDC wajib. TPS yang belum selesai harus tampil sebagai peringatan
+karena map beban tidak bekerja benar.
+
+### Layar 3 — First Start dan Ready
+
+1. Saat mesin berhenti dan HV <30 V, kirim `SETUP,FIRST_START`.
+2. Nyalakan mesin tanpa membuka gas berlebihan.
+3. Firmware membatasi 3.000 RPM dan advance maksimum 10°.
+4. Setelah stabil minimal tiga detik, firmware menyimpan bukti.
+5. Matikan mesin dan tunggu HV <30 V.
+6. Core: gunakan `SETUP,READY,CENTER` jika belum READY.
+7. Dual: gunakan `SETUP,READY,DUAL,sideOffsetCentidegree` setelah offset
+   diketahui. `READY,THREE` tetap diterima untuk aplikasi lama.
+
+SIDE tidak boleh aktif hanya berdasarkan model motor; modul dan offset wajib.
+
+## 10. Status commissioning
+
+`GET,COMMISSION` menghasilkan:
+
+```text
+COMMISSION,1,stage,nextAction,ready,advisoryMask
+```
+
+| `nextAction` | Aksi UI |
+|---:|---|
+| 1 | Pilih pemasangan Core/Dual |
+| 2 | Verifikasi pickup |
+| 3 | Kalibrasi TDC |
+| 4 | Kalibrasi TPS |
+| 5 | Jalankan First Start |
+| 6 | Matikan mesin dan konfirmasi Ready |
+| 7 | Setup selesai |
+| 8 | OEM Learn lanjutan sedang dipilih |
+
+| Bit `advisoryMask` | Arti |
+|---:|---|
+| 0 | Pickup belum selesai |
+| 1 | TDC belum selesai |
+| 2 | TPS belum selesai |
+| 3 | First Start belum terbukti |
+| 4 | SIDE dikonfigurasi tetapi belum aktif |
+| 5 | THERMAL dikonfigurasi tetapi suhu belum valid |
+
+Gunakan `nextAction` untuk tombol utama; jangan menebak tahap dari halaman
+lokal aplikasi.
+
+## 11. Query lain
+
+| Query | Isi |
+|---|---|
+| `GET,INFO` | Platform, R9, versi protokol/paket |
+| `GET,HARDWARE` | Kemampuan PCB/modul |
+| `GET,CAPS` | Batas dan capability |
+| `GET,STATUS` | RPM, TPS, HV, map, permission, PRO |
+| `GET,META` | Metadata map aktif |
+| `GET,SETUP` | Konfigurasi setup lama |
+| `GET,PROFILE` | Profil mesin dan rentang |
+| `GET,TEMP` | Suhu/fan |
+| `GET,ADC` | Nilai raw dan output |
+| `GET,MODE` | Mode internal |
+| `GET,LEARN` | OEM Learn |
+| `GET,OTA` | OTA |
+
+## 12. Buku Petunjuk dalam aplikasi
+
+Menu Wiring/Skematik lama diganti menjadi **Buku Petunjuk**: paket dan modul,
+pin J1, pemasangan Core/Dual, Setup Mudah, arti status, dan diagnosis. Sumber
+konten pengguna berada di [`BUKU_PETUNJUK_PENGGUNA.md`](BUKU_PETUNJUK_PENGGUNA.md).
+Jangan membawa editor skematik/perakitan PCB ke alur pengguna produk jadi.
+
+## 13. Aturan perubahan berikutnya
+
+1. Jangan mengubah UUID, paket v3, atau arti bit lama diam-diam.
+2. Tambahkan fitur secara additive dan iklankan melalui `GET,CAPS`.
+3. Jangan menyebut modul `terdeteksi` hanya dari `installedMask`.
+4. Jangan menampilkan HV SIDE sebagai fault ketika SIDE tidak dipasang.
+5. BLE putus tidak boleh mengubah izin output pengapian.
+6. Perubahan pin harus memperbarui header board, README, skematik dan dokumen ini.
+7. Modul EFI belum menjadi bagian capability R9.
