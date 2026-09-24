@@ -1289,3 +1289,42 @@ Migrasi selesai bila:
 8. EFI belum menjadi capability R9.
 9. Serial adalah identifier publik.
 10. Selama firmwareEnforced=0, binding hanya membatasi UI aplikasi.
+
+
+## 23. Additive protocol R9.3 — physical DET, AUX relay, timing presets
+
+Queries:
+
+    GET,MODULES
+    GET,TIMING
+    GET,AUX
+
+MODULES v2:
+
+    MODULES,2,presentMask,activeMask,observedMask,faultMask,coreProfile,configuredMask,ioOk
+
+presentMask comes from PCF8574P U6 and is authoritative. configuredMask is the saved application choice. A removed module immediately disappears from present/active and appears in fault when still configured. The app must render the switch unchecked/inactive from presentMask, while retaining a separate “previously configured” warning when configuredMask remains set.
+
+Timing configuration:
+
+    SET,TIMING,mode,intensity,minRpm,maxRpm
+
+| mode | name | behavior |
+|---:|---|---|
+| 0 | STANDARD | map only |
+| 1 | SOFT | up to 4° retard in the selected window |
+| 2 | RESPONSIVE | up to 2° advance, still clamped by PROFILE |
+| 3 | KUDA | deterministic low-RPM retard pattern; intensity 8–10 may soft-cut at most 1/12 event |
+
+Intensity is 0..10. Range is restricted to 500..5000 RPM and the effect is disabled above 20% TPS. Firmware still clamps the result to PROFILE/map safety limits. App labels must explain that KUDA is an idle/show effect, not a power map.
+
+AUX commands:
+
+    AUX,KEYLESS,ON
+    AUX,KEYLESS,OFF
+    AUX,START,PULSE,100..3000
+    AUX,ALL,OFF
+
+START is rejected unless AUX is physically detected, keyless is active, battery/fault state is valid and RPM <300. It is cancelled by timeout, RPM >=500, battery/fault failure, I2C failure or module removal. Hardware must keep the OEM neutral/clutch/side-stand interlock and OEM starter relay in series; firmware cannot replace an input that is not present on the header.
+
+New capability tokens: MODULE_DET_PCF8574, TIMING_PRESETS, TIMING_KUDA, AUX_RELAY.

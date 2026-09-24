@@ -1,5 +1,7 @@
 #include "cdi_engine_esp32.h"
 #include "cdi_board_esp32.h"
+#include "cdi_module_io.h"
+#include "cdi_timing_modes.h"
 #include "cdi_timebase.h"
 #include "cdi_r5.h"
 #include "cdi_r5_charger.h"
@@ -60,10 +62,16 @@ static uint16_t s_telemetry_sequence;
 static int64_t s_first_start_good_ms;
 static bool s_first_start_proof_written;
 static bool s_fan_on;
+static cdi_module_io_t s_module_io;
+static cdi_timing_config_t s_timing;
+static uint8_t s_timing_phase;
+static volatile bool s_aux_keyless_on, s_aux_starter_on;
+static volatile int64_t s_aux_starter_deadline_us;
 
 #define NVS_NAMESPACE "cdi_r5"
 #define NVS_KEY_STORE "store"
 #define NVS_KEY_FSPROOF "fsproof"
+#define NVS_KEY_TIMING "timing"
 
 static bool nvs_load_store(cdi_r5_store_image_t *image)
 {
@@ -120,6 +128,54 @@ static bool persist_maps(const cdi_r5_store_image_t *image, void *context)
 {
     (void)context;
     return nvs_save_store(image);
+}
+
+static bool nvs_load_timing(cdi_timing_config_t *config)
+{
+    nvs_handle_t h;
+    size_t len = sizeof(*config);
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_get_blob(h, NVS_KEY_TIMING, config, &len);
+    nvs_close(h);
+    return err == ESP_OK && len == sizeof(*config) &&
+           cdi_timing_config_valid(config);
+}
+
+static bool persist_timing(const cdi_timing_config_t *config, void *context)
+{
+    nvs_handle_t h;
+    (void)context;
+    if (config == NULL || !cdi_timing_config_valid(config) ||
+        nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_set_blob(h, NVS_KEY_TIMING, config, sizeof(*config));
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK;
+}
+
+static bool aux_control(uint8_t channel, bool enable, uint16_t duration_ms,
+                        void *context)
+{
+    (void)context;
+    if (channel == CDI_R9_AUX_ALL) {
+        s_aux_starter_on = false;
+        s_aux_keyless_on = false;
+    } else if (channel == CDI_R9_AUX_KEYLESS) {
+        if (!enable) s_aux_starter_on = false;
+        s_aux_keyless_on = enable;
+    } else if (channel == CDI_R9_AUX_STARTER) {
+        if (!enable) s_aux_starter_on = false;
+        else {
+            if (!s_aux_keyless_on || !s_battery_ok_state || protocol.rpm >= 300u ||
+                protocol.hardware_fault || duration_ms < 100u || duration_ms > 3000u)
+                return false;
+            s_aux_starter_on = true;
+            s_aux_starter_deadline_us = esp_timer_get_time() +
+                                        (int64_t)duration_ms * 1000;
+        }
+    } else return false;
+    return cdi_module_io_set_aux(&s_module_io, s_aux_keyless_on,
+                                 s_aux_starter_on, false);
 }
 
 static void set_protocol_device_identity(void)
@@ -182,7 +238,8 @@ static void IRAM_ATTR sync_setup_fields(void)
     engine.gate_pulse_us = s->gate_pulse_us;
     engine.calibrated = s->stage >= CDI_R7_STAGE_TDC_SAVED;
     engine.center_enabled = s->center_enabled != 0;
-    engine.side_enabled = s->side_enabled != 0;
+    engine.side_enabled = s->side_enabled != 0 &&
+        (protocol.module_present_mask & CDI_R9_MODULE_SIDE) != 0u;
     engine.rpm_limit_override = 0; engine.advance_cap_cdeg = 0; engine.hv_target_override = 0;
     if (s->stage == CDI_R7_STAGE_FIRST_START) {
         engine.rpm_limit_override = s->first_start_rpm_limit;
@@ -300,8 +357,15 @@ static void IRAM_ATTR pickup_isr(void *arg)
         return;
     }
 
+    int16_t timing_trim = 0;
+    bool timing_cut = false;
+    cdi_timing_evaluate(&s_timing, protocol.rpm, protocol.tps_permille,
+                        &s_timing_phase, &timing_trim, &timing_cut);
+    engine.advance_trim_cdeg = (int16_t)(protocol.live_trim_cdeg + timing_trim);
     cdi_r5_status_t decision_status = cdi_r5_make_decision(&engine, &protocol.working,
         period, protocol.tps_permille, &s_soft_phase, &d);
+    if (decision_status == CDI_R5_OK && timing_cut &&
+        d.action == CDI_R5_SPARK_FIRE) d.action = CDI_R5_SPARK_SOFT_CUT;
     if (decision_status == CDI_R5_OK) {
         protocol.rpm = d.rpm;
         s_last_advance_cdeg = d.advance_cdeg;
@@ -343,6 +407,13 @@ void cdi_engine_init(void)
     }
     ESP_ERROR_CHECK(nvs_err);
 
+    if (!nvs_load_timing(&s_timing)) {
+        cdi_timing_config_defaults(&s_timing);
+        (void)persist_timing(&s_timing, NULL);
+    }
+    if (cdi_module_io_init(&s_module_io) != ESP_OK)
+        ESP_LOGE(TAG, "PCF8574 U6 tidak merespons; modul opsional fail-safe OFF");
+
     if (!nvs_load_store(&store) || cdi_r5_store_validate(&store) != CDI_R5_OK) {
         cdi_r5_load_defaults(&store);
         (void)nvs_save_store(&store);
@@ -364,6 +435,11 @@ void cdi_engine_init(void)
     cdi_r5_protocol_init(&protocol, &store);
     set_protocol_device_identity();
     cdi_r5_protocol_set_persist(&protocol, persist_maps, NULL);
+    cdi_r9_protocol_attach_timing(&protocol, &s_timing, persist_timing, NULL);
+    cdi_r9_protocol_attach_aux(&protocol, aux_control, NULL);
+    (void)cdi_module_io_poll(&s_module_io);
+    protocol.module_present_mask = cdi_module_io_present_mask(&s_module_io);
+    protocol.module_io_ok = cdi_module_io_healthy(&s_module_io);
     cdi_r8_oem_learn_init(&oem_learner, engine.timer_hz);
     
     cdi_r8_protocol_attach_oem_learner(&protocol, &oem_learner);
@@ -399,8 +475,20 @@ void cdi_engine_tick_1ms(void)
 {
     static uint8_t divider;
     static uint8_t telemetry_divider;
+    static uint8_t module_divider;
 
     cdi_board_adc_sample_all();
+    if (++module_divider >= 20u) {
+        module_divider = 0u;
+        (void)cdi_module_io_poll(&s_module_io);
+        protocol.module_present_mask = cdi_module_io_present_mask(&s_module_io);
+        protocol.module_io_ok = cdi_module_io_healthy(&s_module_io);
+        if (!protocol.module_io_ok ||
+            !(protocol.module_present_mask & CDI_R9_MODULE_AUX)) {
+            s_aux_starter_on = false;
+            s_aux_keyless_on = false;
+        }
+    }
     uint16_t battery_mv = cdi_r5_vbat_adc_to_mv(cdi_board_adc_raw(CDI_ADC_IDX_VBAT));
     bool battery_ok = battery_mv >= 9500u && battery_mv <= 16000u;
     
@@ -448,7 +536,8 @@ void cdi_engine_tick_1ms(void)
     int16_t temperature_cdeg = 0;
     bool temperature_valid = cdi_r9_temperature_from_adc(&store.setup,
         cdi_board_adc_raw(CDI_ADC_IDX_TEMP), &temperature_cdeg);
-    bool thermal_configured =
+    bool thermal_configured = protocol.module_io_ok &&
+        (protocol.module_present_mask & CDI_R9_MODULE_THERMAL) != 0u &&
         (cdi_r9_effective_module_mask(&store) & CDI_R9_MODULE_THERMAL) != 0u;
     s_fan_on = thermal_configured ?
         cdi_r9_fan_update(&store.setup, temperature_cdeg,
@@ -461,6 +550,17 @@ void cdi_engine_tick_1ms(void)
     protocol.temperature_valid = temperature_valid;
     protocol.fan_output = s_fan_on;
     protocol.hardware_fault = fault_low;
+
+    if (s_aux_starter_on &&
+        (esp_timer_get_time() >= s_aux_starter_deadline_us ||
+         protocol.rpm >= 500u || fault_low || !s_battery_ok_state ||
+         !protocol.module_io_ok ||
+         !(protocol.module_present_mask & CDI_R9_MODULE_AUX)))
+        s_aux_starter_on = false;
+    (void)cdi_module_io_set_aux(&s_module_io, s_aux_keyless_on,
+                                s_aux_starter_on, false);
+    protocol.aux_keyless_on = s_aux_keyless_on;
+    protocol.aux_starter_on = s_aux_starter_on;
 
     if (store.setup.stage != CDI_R7_STAGE_FIRST_START) {
         s_first_start_good_ms = 0; protocol.first_start_seconds = 0u;

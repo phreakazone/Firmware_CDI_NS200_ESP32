@@ -65,6 +65,26 @@ void cdi_r8_protocol_attach_ota(cdi_r5_protocol_t *p,cdi_r8_ota_t *ota)
     p->ota=ota;
 }
 
+void cdi_r9_protocol_attach_timing(cdi_r5_protocol_t *p,
+                                   cdi_timing_config_t *config,
+                                   cdi_r9_timing_persist_fn persist,
+                                   void *context)
+{
+    if (p == NULL) return;
+    p->timing = config;
+    p->timing_persist = persist;
+    p->timing_persist_context = context;
+}
+
+void cdi_r9_protocol_attach_aux(cdi_r5_protocol_t *p,
+                                cdi_r9_aux_control_fn control,
+                                void *context)
+{
+    if (p == NULL) return;
+    p->aux_control = control;
+    p->aux_control_context = context;
+}
+
 static size_t make_frame(unsigned long seq, const char *body,
                          char *out, size_t size)
 {
@@ -124,27 +144,20 @@ static uint8_t module_active_mask(const cdi_r5_protocol_t *p)
 {
     uint8_t mask = 0u;
     uint8_t installed = cdi_r9_effective_module_mask(p->store);
+    if (!p->module_io_ok) mask |= installed;
+    else mask |= installed & (uint8_t)~p->module_present_mask;
     const cdi_r7_setup_t *s = &p->store->setup;
     if (s->side_enabled) mask |= CDI_R9_MODULE_SIDE;
     if (s->fan_mode != CDI_R7_FAN_OFF) mask |= CDI_R9_MODULE_THERMAL;
     if (s->operating_mode == CDI_R8_OP_OEM_LEARN)
         mask |= CDI_R9_MODULE_OEM_LEARN;
     if (p->strobe_active) mask |= CDI_R9_MODULE_AUX;
-    return mask & installed;
+    return mask & installed & p->module_present_mask;
 }
 
 static uint8_t module_observed_mask(const cdi_r5_protocol_t *p)
 {
-    uint8_t mask = 0u;
-    if (p->hv_side >= 30u) mask |= CDI_R9_MODULE_SIDE;
-    if (p->temperature_valid) mask |= CDI_R9_MODULE_THERMAL;
-    if (p->oem_learner != NULL &&
-        (p->oem_learner->profile.accepted_pulses != 0u ||
-         p->oem_learner->profile.side_samples != 0u))
-        mask |= CDI_R9_MODULE_OEM_LEARN;
-    if (p->tps_ref_raw > 50u && p->tps_ref_raw < 4045u)
-        mask |= CDI_R9_MODULE_TPS_DIAG;
-    return mask;
+    return p->module_io_ok ? (p->module_present_mask & CDI_R9_MODULE_ALL) : 0u;
 }
 
 static uint8_t module_fault_mask(const cdi_r5_protocol_t *p)
@@ -218,6 +231,8 @@ static size_t handle_module(cdi_r5_protocol_t *p, unsigned long seq, char **save
     if (!setup_can_write(p))
         return error_frame(seq, "STOP_ENGINE_WAIT_HV_LT30", out, out_size);
     enabled = !strcmp(value, "ON");
+    if (enabled && (!p->module_io_ok || !(p->module_present_mask & bit)))
+        return error_frame(seq, "MODULE_NOT_PRESENT", out, out_size);
     old = p->store->setup;
     p->store->setup.installed_modules |= CDI_R9_MODULE_CONFIG_VALID;
     if (enabled) p->store->setup.installed_modules |= bit;
@@ -552,6 +567,26 @@ static size_t handle_r9_set(cdi_r5_protocol_t *p, unsigned long seq, char **save
     long x, y;
     if (op == NULL || !setup_can_write(p))
         return error_frame(seq, "STOP_ENGINE_WAIT_HV_LT30", out, out_size);
+    if (!strcmp(op, "TIMING")) {
+        cdi_timing_config_t candidate;
+        if (p->timing == NULL ||
+            !parse_uint(strtok_r(NULL, ",", save), CDI_TIMING_KUDA, &a) ||
+            !parse_uint(strtok_r(NULL, ",", save), 10u, &b) ||
+            !parse_int(strtok_r(NULL, ",", save), 500, 4000, &x) ||
+            !parse_int(strtok_r(NULL, ",", save), 600, 5000, &y))
+            return error_frame(seq, "TIMING_RANGE", out, out_size);
+        candidate = *p->timing;
+        candidate.mode = (uint8_t)a;
+        candidate.intensity = (uint8_t)b;
+        candidate.min_rpm = (uint16_t)x;
+        candidate.max_rpm = (uint16_t)y;
+        if (!cdi_timing_config_valid(&candidate) ||
+            (p->timing_persist != NULL &&
+             !p->timing_persist(&candidate, p->timing_persist_context)))
+            return error_frame(seq, "TIMING_RANGE", out, out_size);
+        *p->timing = candidate;
+        return make_frame(seq, "ACK,TIMING", out, out_size);
+    }
     if (!strcmp(op, "LIMIT") &&
         parse_uint(strtok_r(NULL, ",", save), CDI_R5_ABSOLUTE_RPM_CAP, &a) &&
         a >= 500u && a >= p->store->setup.profile_rpm_min &&
@@ -703,6 +738,42 @@ static size_t handle_r9_dyno(cdi_r5_protocol_t *p, unsigned long seq, char **sav
     return error_frame(seq, "DYNO", out, out_size);
 }
 
+static size_t handle_aux(cdi_r5_protocol_t *p, unsigned long seq, char **save,
+                         char *out, size_t out_size)
+{
+    const char *channel = strtok_r(NULL, ",", save);
+    const char *op = strtok_r(NULL, ",", save);
+    unsigned long duration;
+    if (channel == NULL || op == NULL || p->aux_control == NULL)
+        return error_frame(seq, "AUX_COMMAND", out, out_size);
+    if (!strcmp(channel, "ALL") && !strcmp(op, "OFF")) {
+        (void)p->aux_control(CDI_R9_AUX_ALL, false, 0u, p->aux_control_context);
+        return make_frame(seq, "ACK,AUX_ALL_OFF", out, out_size);
+    }
+    if (!p->module_io_ok || !(p->module_present_mask & CDI_R9_MODULE_AUX))
+        return error_frame(seq, "AUX_NOT_PRESENT", out, out_size);
+    if (!setup_can_write(p))
+        return error_frame(seq, "STOP_ENGINE_WAIT_HV_LT30", out, out_size);
+    if (!strcmp(channel, "KEYLESS") &&
+        (!strcmp(op, "ON") || !strcmp(op, "OFF"))) {
+        bool enable = !strcmp(op, "ON");
+        if (!p->aux_control(CDI_R9_AUX_KEYLESS, enable, 0u,
+                            p->aux_control_context))
+            return error_frame(seq, "AUX_REJECTED", out, out_size);
+        return make_frame(seq, enable ? "ACK,KEYLESS_ON" : "ACK,KEYLESS_OFF",
+                          out, out_size);
+    }
+    if (!strcmp(channel, "START") && !strcmp(op, "PULSE") &&
+        parse_uint(strtok_r(NULL, ",", save), 3000u, &duration) &&
+        duration >= 100u) {
+        if (!p->aux_control(CDI_R9_AUX_STARTER, true, (uint16_t)duration,
+                            p->aux_control_context))
+            return error_frame(seq, "START_INTERLOCK", out, out_size);
+        return make_frame(seq, "ACK,START_PULSE", out, out_size);
+    }
+    return error_frame(seq, "AUX_COMMAND", out, out_size);
+}
+
 size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                               char *response, size_t response_size)
 {
@@ -755,7 +826,7 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->tps_closed_adc,s->tps_open_adc,s->first_start_hv_volts,s->center_enabled,s->side_enabled,s->fan_mode,p->pickup_quality);
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
-                "CAPS,5,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START,MODULE_STATUS,QUICK_INSTALL,FW_VERSION,DEVICE_SERIAL,APP_LOCAL_BINDING");
+                "CAPS,6,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START,MODULE_STATUS,MODULE_DET_PCF8574,TIMING_PRESETS,TIMING_KUDA,AUX_RELAY,QUICK_INSTALL,FW_VERSION,DEVICE_SERIAL,APP_LOCAL_BINDING");
         } else if (what != NULL && strcmp(what, "INFO") == 0) {
             /* Additive query: existing commands/UUID/telemetry remain unchanged. */
             n=snprintf(body,sizeof(body),
@@ -772,14 +843,15 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
             n=snprintf(body,sizeof(body),
                 "HARDWARE,1,CENTER_BASE,SIDE_OPTIONAL,THERMAL_OPTIONAL,OEM_LEARN_OPTIONAL,AUX_OPTIONAL,TPS_DIAG_OPTIONAL");
         } else if (what != NULL && strcmp(what, "MODULES") == 0) {
-            uint8_t installed = cdi_r9_effective_module_mask(p->store);
+            uint8_t configured = cdi_r9_effective_module_mask(p->store);
+            uint8_t installed = module_observed_mask(p);
             uint8_t active = module_active_mask(p);
-            uint8_t observed = module_observed_mask(p);
             uint8_t fault = module_fault_mask(p);
             unsigned core = (installed & CDI_R9_MODULE_SIDE) ?
                 (p->store->setup.side_enabled ? 2u : 1u) : 0u;
-            n=snprintf(body,sizeof(body),"MODULES,1,%u,%u,%u,%u,%u",
-                installed,active,observed,fault,core);
+            n=snprintf(body,sizeof(body),"MODULES,2,%u,%u,%u,%u,%u,%u,%u",
+                installed,active,installed,fault,core,configured,
+                p->module_io_ok?1u:0u);
         } else if (what != NULL && strcmp(what, "COMMISSION") == 0) {
             n=snprintf(body,sizeof(body),"COMMISSION,1,%u,%u,%u,%u",
                 p->store->setup.stage,commission_next(p),
@@ -795,6 +867,15 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->profile_name,s->profile_rpm_min,s->profile_rpm_max,
                 s->profile_advance_min_cdeg/10,s->profile_advance_max_cdeg/10,
                 s->pulses_per_revolution,s->trigger_angle_cdeg/10u);
+        } else if (what != NULL && strcmp(what, "TIMING") == 0 &&
+                   p->timing != NULL) {
+            n=snprintf(body,sizeof(body),"TIMING,1,%u,%u,%u,%u",
+                p->timing->mode,p->timing->intensity,
+                p->timing->min_rpm,p->timing->max_rpm);
+        } else if (what != NULL && strcmp(what, "AUX") == 0) {
+            n=snprintf(body,sizeof(body),"AUX,1,%u,%u,%u",
+                p->aux_keyless_on?1u:0u,p->aux_starter_on?1u:0u,
+                (p->module_present_mask&CDI_R9_MODULE_AUX)?1u:0u);
         } else if (what != NULL && strcmp(what, "TEMP") == 0) {
             const cdi_r7_setup_t *s=&p->store->setup;
             n=snprintf(body,sizeof(body),"TEMP,%u,%u,%u,%d,%u,%u",
@@ -855,6 +936,7 @@ if (strcmp(cmd,"MAP")==0) {
     if (strcmp(cmd,"SET")==0) return handle_r9_set(p,seq,&save,response,response_size);
     if (strcmp(cmd,"TEMP")==0) return handle_r9_temp(p,seq,&save,response,response_size);
     if (strcmp(cmd,"DYNO")==0) return handle_r9_dyno(p,seq,&save,response,response_size);
+    if (strcmp(cmd,"AUX")==0) return handle_aux(p,seq,&save,response,response_size);
     if (strcmp(cmd,"SETUP")==0) return handle_setup(p,seq,&save,response,response_size);
     if (strcmp(cmd,"MODULE")==0) return handle_module(p,seq,&save,response,response_size);
     if (strcmp(cmd,"MODE")==0) return handle_mode(p,seq,&save,response,response_size);

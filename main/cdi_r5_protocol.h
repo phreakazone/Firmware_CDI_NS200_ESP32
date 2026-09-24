@@ -4,17 +4,28 @@
 #include "cdi_r5.h"
 #include "cdi_r8_oem_learn.h"
 #include "cdi_r8_ota.h"
+#include "cdi_timing_modes.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #define CDI_FW_RELEASE "R9"
-#define CDI_FW_SEMVER "9.2.0"
-#define CDI_FW_BUILD_ID "20260923"
+#define CDI_FW_SEMVER "9.3.0"
+#define CDI_FW_BUILD_ID "20260924"
 #define CDI_DEVICE_SERIAL_LEN 32u
 
 typedef bool (*cdi_r5_persist_fn)(const cdi_r5_store_image_t *image,
                                   void *context);
+typedef bool (*cdi_r9_timing_persist_fn)(const cdi_timing_config_t *config,
+                                         void *context);
+typedef bool (*cdi_r9_aux_control_fn)(uint8_t channel, bool enable,
+                                      uint16_t duration_ms, void *context);
+
+enum {
+    CDI_R9_AUX_KEYLESS = 0,
+    CDI_R9_AUX_STARTER = 1,
+    CDI_R9_AUX_ALL = 2
+};
 
 typedef struct {
     cdi_r5_store_image_t *store;
@@ -29,6 +40,13 @@ typedef struct {
     bool temperature_valid, fan_output, hardware_fault;
     bool hv_enabled, output_permission, pro_enabled, strobe_active;
     bool firmware_update_active, map_staging_active, dyno_active;
+    uint8_t module_present_mask;
+    bool module_io_ok, aux_keyless_on, aux_starter_on;
+    cdi_timing_config_t *timing;
+    cdi_r9_timing_persist_fn timing_persist;
+    void *timing_persist_context;
+    cdi_r9_aux_control_fn aux_control;
+    void *aux_control_context;
     cdi_r8_oem_learner_t *oem_learner;
     cdi_r8_ota_t *ota;
     cdi_r5_persist_fn persist;
@@ -48,6 +66,13 @@ void cdi_r8_protocol_attach_oem_learner(cdi_r5_protocol_t *protocol,
                                         cdi_r8_oem_learner_t *learner);
 void cdi_r8_protocol_attach_ota(cdi_r5_protocol_t *protocol,
                                 cdi_r8_ota_t *ota);
+void cdi_r9_protocol_attach_timing(cdi_r5_protocol_t *protocol,
+                                   cdi_timing_config_t *config,
+                                   cdi_r9_timing_persist_fn persist,
+                                   void *context);
+void cdi_r9_protocol_attach_aux(cdi_r5_protocol_t *protocol,
+                                cdi_r9_aux_control_fn control,
+                                void *context);
 /* Frame: @sequence,COMMAND,args*CRC16. Returns response length, zero on overflow. */
 size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *protocol,
                               const char *frame,

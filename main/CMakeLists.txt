@@ -2,10 +2,12 @@ idf_component_register(
     SRCS
         "main.c"
         "cdi_board_esp32.c"
+        "cdi_module_io.c"
         "cdi_timebase.c"
         "cdi_engine_esp32.c"
         "cdi_ble_nimble.c"
         "cdi_r5.c"
+        "cdi_timing_modes.c"
         "cdi_r5_charger.c"
         "cdi_r5_protocol.c"
         "cdi_r5_ble.c"

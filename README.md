@@ -228,3 +228,15 @@ Jika pin, fitur, atau paket aplikasi diubah, perbarui bersama-sama:
 5. `docs/APP_FIRMWARE_REFERENCE.md`.
 
 Jangan menggunakan nama pin STM32 (`PA0`, `PB3`, dan sejenisnya) sebagai sumber hardware ESP32. Gunakan NetLabel skematik dan konstanta `CDI_PIN_*` native.
+
+
+## Rev C module detection and timing presets (R9.3)
+
+- GPIO21/GPIO22 operate PCF8574P U6 at 0x20.
+- P0..P4 read SIDE/THERMAL/OEM_LEARN/AUX/TPS DET, active-low and debounced.
+- Removing a module clears its runtime installed/active state and disables the related output.
+- P5/P6 drive AUX keyless/starter through mandatory active-low PNP pre-drivers; power-up HIGH is OFF.
+- Timing presets are STANDARD, SOFT, RESPONSIVE and KUDA. KUDA is restricted to the configured low-RPM/low-TPS window.
+- Firmware source was updated only; no build artifact was generated.
+
+See [hardware block/BOM guide](docs/HARDWARE_REV_C_BLOCKS_BOM.md) and [app/firmware reference](docs/APP_FIRMWARE_REFERENCE.md).
