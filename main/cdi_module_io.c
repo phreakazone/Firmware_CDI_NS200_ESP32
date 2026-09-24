@@ -8,22 +8,45 @@
 
 #define MOD_I2C_PORT I2C_NUM_0
 #define DET_MASK 0x1fu
+#define REQUEST_MASK 0x07u
 #define EXP1_BIT (1u << 5)
 #define EXP2_BIT (1u << 6)
 #define EXP3_BIT (1u << 7)
 #define IO_TIMEOUT pdMS_TO_TICKS(5)
 
+static esp_err_t write_byte(uint8_t address, uint8_t value)
+{
+    return i2c_master_write_to_device(MOD_I2C_PORT, address,
+                                      &value, 1u, IO_TIMEOUT);
+}
+
 static esp_err_t write_latch(const cdi_module_io_t *io)
 {
-    return i2c_master_write_to_device(MOD_I2C_PORT, CDI_MOD_I2C_ADDRESS,
-                                      &io->output_latch, 1u, IO_TIMEOUT);
+    return write_byte(CDI_MOD_I2C_ADDRESS, io->output_latch);
+}
+
+void cdi_aux_input_config_defaults(cdi_aux_input_config_t *config)
+{
+    if (config == NULL) return;
+    memset(config, 0, sizeof(*config));
+    config->magic = CDI_AUX_INPUT_MAGIC;
+    config->version = CDI_AUX_INPUT_VERSION;
+    config->vehicle_profile = CDI_AUX_PROFILE_NS200;
+}
+
+bool cdi_aux_input_config_valid(const cdi_aux_input_config_t *config)
+{
+    return config != NULL && config->magic == CDI_AUX_INPUT_MAGIC &&
+           config->version == CDI_AUX_INPUT_VERSION &&
+           config->enabled <= 1u &&
+           config->vehicle_profile <= CDI_AUX_PROFILE_UNIVERSAL_MATIC;
 }
 
 esp_err_t cdi_module_io_init(cdi_module_io_t *io)
 {
     if (io == NULL) return ESP_ERR_INVALID_ARG;
     memset(io, 0, sizeof(*io));
-    /* PCF power-up HIGH. DET remain inputs; active-low EXP drivers remain OFF. */
+    /* Both expanders power up HIGH. U6 EXP outputs therefore remain OFF. */
     io->output_latch = 0xffu;
     i2c_config_t cfg = {
         .mode = I2C_MODE_MASTER,
@@ -40,13 +63,16 @@ esp_err_t cdi_module_io_init(cdi_module_io_t *io)
     if (err == ESP_ERR_INVALID_STATE) err = ESP_OK;
     if (err == ESP_OK) err = write_latch(io);
     io->healthy = err == ESP_OK;
-    return err;
+
+    esp_err_t request_err = err == ESP_OK ?
+        write_byte(CDI_REQ_I2C_ADDRESS, 0xffu) : err;
+    io->request_healthy = request_err == ESP_OK;
+    return err != ESP_OK ? err : request_err;
 }
 
-bool cdi_module_io_poll(cdi_module_io_t *io)
+static bool poll_u6(cdi_module_io_t *io)
 {
     uint8_t raw = 0xffu;
-    if (io == NULL) return false;
     esp_err_t err = i2c_master_read_from_device(MOD_I2C_PORT,
         CDI_MOD_I2C_ADDRESS, &raw, 1u, IO_TIMEOUT);
     if (err != ESP_OK) {
@@ -71,11 +97,53 @@ bool cdi_module_io_poll(cdi_module_io_t *io)
     return true;
 }
 
+static bool poll_u7(cdi_module_io_t *io)
+{
+    uint8_t raw = 0xffu;
+    esp_err_t err = i2c_master_read_from_device(MOD_I2C_PORT,
+        CDI_REQ_I2C_ADDRESS, &raw, 1u, IO_TIMEOUT);
+    if (err != ESP_OK) {
+        if (io->request_consecutive_errors < 255u)
+            ++io->request_consecutive_errors;
+        if (io->request_consecutive_errors >= 3u) {
+            io->request_healthy = false;
+            io->request_mask = 0u;
+        }
+        return false;
+    }
+    io->request_consecutive_errors = 0u;
+    io->request_healthy = true;
+    uint8_t candidate = (uint8_t)(~raw) & REQUEST_MASK;
+    if (candidate != io->request_candidate_mask) {
+        io->request_candidate_mask = candidate;
+        io->request_stable_samples = 1u;
+    } else if (io->request_stable_samples < 3u) {
+        ++io->request_stable_samples;
+    }
+    if (io->request_stable_samples >= 3u)
+        io->request_mask = io->request_candidate_mask;
+    return true;
+}
+
+bool cdi_module_io_poll(cdi_module_io_t *io)
+{
+    if (io == NULL) return false;
+    bool u6_ok = poll_u6(io);
+    bool u7_ok = poll_u7(io);
+    return u6_ok && u7_ok;
+}
+
 uint8_t cdi_module_io_present_mask(const cdi_module_io_t *io)
 { return io != NULL && io->healthy ? io->present_mask : 0u; }
 
+uint8_t cdi_module_io_request_mask(const cdi_module_io_t *io)
+{ return io != NULL && io->request_healthy ? io->request_mask : 0u; }
+
 bool cdi_module_io_healthy(const cdi_module_io_t *io)
 { return io != NULL && io->healthy; }
+
+bool cdi_module_io_requests_healthy(const cdi_module_io_t *io)
+{ return io != NULL && io->request_healthy; }
 
 bool cdi_module_io_set_aux(cdi_module_io_t *io, bool keyless_on,
                            bool starter_on, bool exp3_on)
@@ -89,6 +157,6 @@ bool cdi_module_io_set_aux(cdi_module_io_t *io, bool keyless_on,
     uint8_t previous = io->output_latch;
     io->output_latch = next;
     if (write_latch(io) == ESP_OK) return true;
-    io->output_latch = previous; /* retry on the next control tick */
+    io->output_latch = previous;
     return false;
 }
