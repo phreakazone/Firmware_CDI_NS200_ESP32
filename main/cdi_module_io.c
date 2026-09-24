@@ -86,6 +86,9 @@ bool cdi_module_io_set_aux(cdi_module_io_t *io, bool keyless_on,
     if (starter_on) next &= (uint8_t)~EXP2_BIT;
     if (exp3_on) next &= (uint8_t)~EXP3_BIT;
     if (next == io->output_latch) return true;
+    uint8_t previous = io->output_latch;
     io->output_latch = next;
-    return write_latch(io) == ESP_OK;
+    if (write_latch(io) == ESP_OK) return true;
+    io->output_latch = previous; /* retry on the next control tick */
+    return false;
 }
