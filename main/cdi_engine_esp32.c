@@ -240,6 +240,8 @@ static void IRAM_ATTR sync_setup_fields(void)
     engine.center_enabled = s->center_enabled != 0;
     engine.side_enabled = s->side_enabled != 0 &&
         (protocol.module_present_mask & CDI_R9_MODULE_SIDE) != 0u;
+    engine.advance_min_cdeg = s->profile_advance_min_cdeg;
+    engine.advance_max_cdeg = s->profile_advance_max_cdeg;
     engine.rpm_limit_override = 0; engine.advance_cap_cdeg = 0; engine.hv_target_override = 0;
     if (s->stage == CDI_R7_STAGE_FIRST_START) {
         engine.rpm_limit_override = s->first_start_rpm_limit;
