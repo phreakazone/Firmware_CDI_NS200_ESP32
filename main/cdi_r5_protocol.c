@@ -85,6 +85,16 @@ void cdi_r9_protocol_attach_aux(cdi_r5_protocol_t *p,
     p->aux_control_context = context;
 }
 
+void cdi_r9_protocol_attach_aux_inputs(
+    cdi_r5_protocol_t *p, cdi_aux_input_config_t *config,
+    cdi_r9_aux_input_persist_fn persist, void *context)
+{
+    if (p == NULL) return;
+    p->aux_input_config = config;
+    p->aux_input_persist = persist;
+    p->aux_input_persist_context = context;
+}
+
 static size_t make_frame(unsigned long seq, const char *body,
                          char *out, size_t size)
 {
@@ -746,6 +756,31 @@ static size_t handle_aux(cdi_r5_protocol_t *p, unsigned long seq, char **save,
     unsigned long duration;
     if (channel == NULL || op == NULL || p->aux_control == NULL)
         return error_frame(seq, "AUX_COMMAND", out, out_size);
+    if (!strcmp(channel, "CONFIG")) {
+        const char *state = strtok_r(NULL, ",", save);
+        cdi_aux_input_config_t candidate;
+        if (p->aux_input_config == NULL || state == NULL || !setup_can_write(p))
+            return error_frame(seq, "AUX_CONFIG", out, out_size);
+        candidate = *p->aux_input_config;
+        if (!strcmp(op, "NS200"))
+            candidate.vehicle_profile = CDI_AUX_PROFILE_NS200;
+        else if (!strcmp(op, "MANUAL"))
+            candidate.vehicle_profile = CDI_AUX_PROFILE_UNIVERSAL_MANUAL;
+        else if (!strcmp(op, "MATIC"))
+            candidate.vehicle_profile = CDI_AUX_PROFILE_UNIVERSAL_MATIC;
+        else
+            return error_frame(seq, "AUX_PROFILE", out, out_size);
+        if (!strcmp(state, "ON")) candidate.enabled = 1u;
+        else if (!strcmp(state, "OFF")) candidate.enabled = 0u;
+        else return error_frame(seq, "AUX_CONFIG", out, out_size);
+        if (!cdi_aux_input_config_valid(&candidate) ||
+            (p->aux_input_persist != NULL &&
+             !p->aux_input_persist(&candidate,
+                                   p->aux_input_persist_context)))
+            return error_frame(seq, "AUX_CONFIG_SAVE", out, out_size);
+        *p->aux_input_config = candidate;
+        return make_frame(seq, "ACK,AUX_CONFIG", out, out_size);
+    }
     if (!strcmp(channel, "ALL") && !strcmp(op, "OFF")) {
         (void)p->aux_control(CDI_R9_AUX_ALL, false, 0u, p->aux_control_context);
         return make_frame(seq, "ACK,AUX_ALL_OFF", out, out_size);
@@ -826,7 +861,7 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->tps_closed_adc,s->tps_open_adc,s->first_start_hv_volts,s->center_enabled,s->side_enabled,s->fan_mode,p->pickup_quality);
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
-                "CAPS,6,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START,MODULE_STATUS,MODULE_DET_PCF8574,TIMING_PRESETS,TIMING_KUDA,AUX_RELAY,QUICK_INSTALL,FW_VERSION,DEVICE_SERIAL,APP_LOCAL_BINDING");
+                "CAPS,7,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START,MODULE_STATUS,MODULE_DET_PCF8574,TIMING_PRESETS,TIMING_KUDA,AUX_RELAY,AUX_INPUTS_U7,UNIVERSAL_MANUAL_INTERLOCK,QUICK_INSTALL,FW_VERSION,DEVICE_SERIAL,APP_LOCAL_BINDING");
         } else if (what != NULL && strcmp(what, "INFO") == 0) {
             /* Additive query: existing commands/UUID/telemetry remain unchanged. */
             n=snprintf(body,sizeof(body),
@@ -873,9 +908,12 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 p->timing->mode,p->timing->intensity,
                 p->timing->min_rpm,p->timing->max_rpm);
         } else if (what != NULL && strcmp(what, "AUX") == 0) {
-            n=snprintf(body,sizeof(body),"AUX,1,%u,%u,%u",
+            n=snprintf(body,sizeof(body),"AUX,2,%u,%u,%u,%u,%u,%u,%u",
                 p->aux_keyless_on?1u:0u,p->aux_starter_on?1u:0u,
-                (p->module_present_mask&CDI_R9_MODULE_AUX)?1u:0u);
+                (p->module_present_mask&CDI_R9_MODULE_AUX)?1u:0u,
+                p->aux_input_config?p->aux_input_config->enabled:0u,
+                p->aux_input_config?p->aux_input_config->vehicle_profile:0u,
+                p->aux_request_mask,p->aux_request_io_ok?1u:0u);
         } else if (what != NULL && strcmp(what, "TEMP") == 0) {
             const cdi_r7_setup_t *s=&p->store->setup;
             n=snprintf(body,sizeof(body),"TEMP,%u,%u,%u,%d,%u,%u",
