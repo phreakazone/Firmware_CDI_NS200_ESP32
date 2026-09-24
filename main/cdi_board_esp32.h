@@ -20,7 +20,10 @@
 #define CDI_PIN_OEM_CENTER      GPIO_NUM_16  /* PC817 open collector, active-low */
 #define CDI_PIN_OEM_SIDE        GPIO_NUM_17  /* PC817 open collector, active-low */
 #define CDI_PIN_BENCH_LOOP      GPIO_NUM_5
-#define CDI_PIN_AUDIO_PWM       GPIO_NUM_23  /* cadangan AUX; selalu LOW saat ini */
+#define CDI_PIN_AUDIO_PWM       GPIO_NUM_23  /* AUX audio PWM */
+#define CDI_PIN_MOD_I2C_SDA     GPIO_NUM_21  /* PCF8574P U6 */
+#define CDI_PIN_MOD_I2C_SCL     GPIO_NUM_22  /* PCF8574P U6 */
+#define CDI_MOD_I2C_ADDRESS     0x20u        /* A0=A1=A2=GND */
 
 /* Alias lama dipertahankan agar port ESP32 dan aplikasi lama tidak terputus. */
 #define CDI_PIN_PICKUP_CENTER   CDI_PIN_PICKUP_DIG
