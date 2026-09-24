@@ -24,6 +24,7 @@
 #define CDI_PIN_MOD_I2C_SDA     GPIO_NUM_21  /* PCF8574P U6 */
 #define CDI_PIN_MOD_I2C_SCL     GPIO_NUM_22  /* PCF8574P U6 */
 #define CDI_MOD_I2C_ADDRESS     0x20u        /* A0=A1=A2=GND */
+#define CDI_REQ_I2C_ADDRESS     0x21u        /* U7: A0=3V3, A1=A2=GND */
 
 /* Alias lama dipertahankan agar port ESP32 dan aplikasi lama tidak terputus. */
 #define CDI_PIN_PICKUP_CENTER   CDI_PIN_PICKUP_DIG
