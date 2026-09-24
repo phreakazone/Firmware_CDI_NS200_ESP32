@@ -144,8 +144,6 @@ static uint8_t module_active_mask(const cdi_r5_protocol_t *p)
 {
     uint8_t mask = 0u;
     uint8_t installed = cdi_r9_effective_module_mask(p->store);
-    if (!p->module_io_ok) mask |= installed;
-    else mask |= installed & (uint8_t)~p->module_present_mask;
     const cdi_r7_setup_t *s = &p->store->setup;
     if (s->side_enabled) mask |= CDI_R9_MODULE_SIDE;
     if (s->fan_mode != CDI_R7_FAN_OFF) mask |= CDI_R9_MODULE_THERMAL;
@@ -164,6 +162,8 @@ static uint8_t module_fault_mask(const cdi_r5_protocol_t *p)
 {
     uint8_t mask = 0u;
     uint8_t installed = cdi_r9_effective_module_mask(p->store);
+    if (!p->module_io_ok) mask |= installed;
+    else mask |= installed & (uint8_t)~p->module_present_mask;
     if ((installed & CDI_R9_MODULE_SIDE) && p->store->setup.side_enabled &&
         p->hardware_fault)
         mask |= CDI_R9_MODULE_SIDE;
