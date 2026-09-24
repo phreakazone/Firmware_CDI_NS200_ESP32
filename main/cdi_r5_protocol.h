@@ -5,12 +5,13 @@
 #include "cdi_r8_oem_learn.h"
 #include "cdi_r8_ota.h"
 #include "cdi_timing_modes.h"
+#include "cdi_module_io.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #define CDI_FW_RELEASE "R9"
-#define CDI_FW_SEMVER "9.3.0"
+#define CDI_FW_SEMVER "9.4.0"
 #define CDI_FW_BUILD_ID "20260924"
 #define CDI_DEVICE_SERIAL_LEN 32u
 
@@ -20,6 +21,8 @@ typedef bool (*cdi_r9_timing_persist_fn)(const cdi_timing_config_t *config,
                                          void *context);
 typedef bool (*cdi_r9_aux_control_fn)(uint8_t channel, bool enable,
                                       uint16_t duration_ms, void *context);
+typedef bool (*cdi_r9_aux_input_persist_fn)(
+    const cdi_aux_input_config_t *config, void *context);
 
 enum {
     CDI_R9_AUX_KEYLESS = 0,
@@ -47,6 +50,11 @@ typedef struct {
     void *timing_persist_context;
     cdi_r9_aux_control_fn aux_control;
     void *aux_control_context;
+    cdi_aux_input_config_t *aux_input_config;
+    cdi_r9_aux_input_persist_fn aux_input_persist;
+    void *aux_input_persist_context;
+    uint8_t aux_request_mask;
+    bool aux_request_io_ok;
     cdi_r8_oem_learner_t *oem_learner;
     cdi_r8_ota_t *ota;
     cdi_r5_persist_fn persist;
@@ -73,6 +81,9 @@ void cdi_r9_protocol_attach_timing(cdi_r5_protocol_t *protocol,
 void cdi_r9_protocol_attach_aux(cdi_r5_protocol_t *protocol,
                                 cdi_r9_aux_control_fn control,
                                 void *context);
+void cdi_r9_protocol_attach_aux_inputs(
+    cdi_r5_protocol_t *protocol, cdi_aux_input_config_t *config,
+    cdi_r9_aux_input_persist_fn persist, void *context);
 /* Frame: @sequence,COMMAND,args*CRC16. Returns response length, zero on overflow. */
 size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *protocol,
                               const char *frame,
