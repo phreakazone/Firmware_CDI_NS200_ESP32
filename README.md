@@ -200,11 +200,14 @@ Jangan menggunakan nama pin STM32 (`PA0`, `PB3`, dan sejenisnya) sebagai sumber 
 
 See [hardware block/BOM guide](docs/HARDWARE_REV_C_BLOCKS_BOM.md) and [app/firmware reference](docs/APP_FIRMWARE_REFERENCE.md).
 
-## Rev C Freeze 2 — contact/keyless/starter
+## Rev C Freeze 3 — physical contact/keyless/starter
 
-- U6 PCF8574P alamat 0x20 menangani DET dan output AUX; U7 alamat 0x21 membaca KEYLESS_REQ, START_REQ, serta MODE_REQ/NEUTRAL_IN.
+- U6 PCF8574P alamat 0x20 menangani DET dan output AUX; U7 alamat 0x21 membaca KEYLESS_REQ, START_REQ, MODE_REQ/NEUTRAL_IN, serta posisi kontak mekanis J1.5 pada P3.
+- J1.5 tetap jalur kontak mekanis mentah. K1 menghubungkan BAT_FUSED_IN ke VIN_PROT sesudah J1.5/DREV, sehingga relay hold tidak memalsukan status kontak fisik.
 - `AUX,KEYLESS,ON` memberi izin pengapian dan mengaktifkan K1. `AUX,START,PULSE,100..3000` mengaktifkan K2 sementara; K2 lepas saat RPM ≥500 atau terjadi fault.
 - `AUX,KEYLESS,OFF` dan `AUX,ALL,OFF` menjalankan CONTACT OFF: K2 OFF, spark/HV OFF, lalu K1 OFF.
 - K2 juga dibatasi U8 NE555 one-shot: 2.42 s nominal dan sekitar 2.93 s worst-case, sehingga PCF/I²C yang macet LOW tidak dapat menahan starter terus-menerus.
 - UNIVERSAL_MANUAL menolak starter tanpa NEUTRAL_IN. UNIVERSAL_MATIC tidak mewajibkan netral. Interlock OEM tetap harus dipertahankan.
+- `GET,AUX` schema 3 melaporkan sumber kontak OFF/MECHANICAL/KEYLESS, posisi mekanis, izin pengapian, dan status mesin. Aplikasi memakai data ini untuk tombol tunggal KONTAK ON / START ENGINE / STOP ENGINE.
+- Timing schema 2 menambah DRUMBAND, FOMO, dan CUSTOM di samping STANDARD, SOFT, RESPONSIVE, serta KUDA.
 - Source firmware saja yang diperbarui; belum dibuild dan belum dijadikan artefak produksi.
