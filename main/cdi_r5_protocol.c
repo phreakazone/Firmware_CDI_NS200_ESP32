@@ -861,7 +861,7 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->tps_closed_adc,s->tps_open_adc,s->first_start_hv_volts,s->center_enabled,s->side_enabled,s->fan_mode,p->pickup_quality);
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
-                "CAPS,7,30000,-300,800,32,16,4,12,FAN,DYNO,PROFILE,OEM_LEARN,MODULE_STATUS,TIMING_PRESETS,AUX_INPUTS_U7,QUICK_INSTALL,MECHANICAL_CONTACT_SENSE,ENGINE_CONTROL_ONE_BUTTON,UNIVERSAL_CDI,SIGNED_LIVE,HV_TARGET_MAX_345V");
+                "CAPS,7,30000,-300,800,32,16,4,12,FAN,DYNO,PROFILE,OEM_LEARN,MANUAL,DIY,MODULE_STATUS,TIMING_PRESETS,AUX_INPUTS_U7,QUICK_INSTALL,MECHANICAL_CONTACT_SENSE,ENGINE_CONTROL_ONE_BUTTON,UNIVERSAL_CDI,SIGNED_LIVE,HV_TARGET_MAX_345V");
         } else if (what != NULL && strcmp(what, "INFO") == 0) {
             /* Additive query: existing commands/UUID/telemetry remain unchanged. */
             n=snprintf(body,sizeof(body),

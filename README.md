@@ -352,6 +352,8 @@ Log lapangan mengonfirmasi reboot nyata pada ESP32: `LoadProhibited` di `vhci_fl
 
 R9.6.3 memakai dua antrean TX: antrean prioritas delapan paket untuk ACK/response dan status OTA, serta satu slot latest-value untuk telemetri agar paket lama tidak menumpuk. Event pada default event queue NimBLE menguras ACK/OTA lebih dahulu dan hanya callback event host tersebut yang membuat mbuf serta memanggil `ble_gatts_notify_custom()`. Command dan data OTA masuk satu FIFO worker 16 paket sehingga commit NVS maupun `esp_ota_write()` tidak lagi berjalan pada callback GATT dan urutan BEGIN/DATA/END tetap terjaga. Disconnect mengosongkan antrean TX sehingga paket dari connection handle lama tidak ikut terkirim setelah reconnect. UUID, payload command, telemetry v3, J1, JMOD, dan skematik tidak berubah.
 
+Capability R9.6.3 juga mengumumkan `MANUAL` dan `DIY` sesuai command `MODE` yang memang diimplementasikan firmware. Ini mencegah aplikasi menolak pilihan commissioning tersebut karena daftar `CAPS` yang sebelumnya tidak lengkap.
+
 Peringatan `PCF8574 U6 tidak merespons; modul opsional fail-safe OFF` sesudah reboot adalah kondisi yang diharapkan saat menguji ESP32 tanpa PCB Core; itu bukan penyebab panic. Kriteria uji regresi: `SETUP,INSTALL,CORE,OEM_REMOVED`, perpindahan Dashboard/Setup, background/resume aplikasi, dan telemetri aktif tidak boleh menghasilkan reboot, `SW_CPU_RESET`, atau disconnect lokal.
 
 ## NVS setup journal R9.6.2
