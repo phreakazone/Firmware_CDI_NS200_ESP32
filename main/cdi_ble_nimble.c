@@ -241,7 +241,7 @@ static int command_write_cb(uint16_t conn_handle, uint16_t attr_handle,
 static int ota_data_write_cb(uint16_t conn_handle, uint16_t attr_handle,
                              struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    (void)conn_handle; (void)attr_handle; (void)arg;
+    (void)attr_handle; (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
     ble_work_job_t job = {
         .conn_handle = conn_handle,
