@@ -79,3 +79,10 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# --- Stabilitas BLE saat command SETUP/NVS ---------------------------
+# Satu aplikasi aktif per CDI; tambah pool mbuf agar telemetri dan ACK tidak
+# kehabisan buffer ketika flash/NVS sedang sibuk.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=32
+CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=32

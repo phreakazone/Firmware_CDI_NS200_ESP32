@@ -9,7 +9,7 @@ README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kont
 | Item | Nilai dari source |
 |---|---|
 | Release | R9 |
-| Semantic version | 9.6.0 |
+| Semantic version | 9.6.1 |
 | Build ID | 20260925 |
 | Platform | ESP32 klasik/WROOM-32 |
 | Protocol command | 5 |
@@ -345,6 +345,12 @@ Referensi penetapan baseline:
 - [Pulsar 200NS Service Manual](https://roadsafetymoris.org.in/ns200/bajaj_pulsar_200_nsServiceManual.pdf): idle standar 1350–1450 RPM.
 
 Referensi tersebut menetapkan metode dan envelope kerja, bukan angka universal untuk nama KUDA/DRUMBAND/FOMO. Nilai profil IgniTra di atas adalah baseline konservatif; hasil suara dan batas termalnya harus dikunci dari log RPM, timing, suhu mesin, dan pemeriksaan busi pada prototipe.
+
+## Koreksi reconnect saat konfirmasi Core
+
+R9.6.1 menutup race TX yang masih ada pada R9.6.0: telemetri dan ACK sebelumnya dapat memanggil NimBLE secara bersamaan dari task berbeda tepat saat `SETUP,INSTALL` melakukan commit NVS. Implementasi final memakai satu mutex TX, menjeda telemetri selama command diproses, memperbesar stack worker command menjadi 8 KiB, menyediakan 32 blok mbuf kelas-1, dan membatasi satu koneksi aplikasi aktif. GAP mencatat `disconnect reason` serta worker mencatat stack watermark untuk diagnosis tanpa mengubah J1/JMOD atau logika setup.
+
+Hasil yang diwajibkan: menekan **Konfirmasi Pasang Core 1-Coil** menghasilkan `ACK,INSTALL_CORE` atau `ERR,STOP_ENGINE_WAIT_HV_LT30`; keduanya tidak boleh memulai reconnect. ESP32 tanpa Core boleh menghasilkan nilai ADC tidak valid, tetapi link BLE harus tetap hidup.
 
 ## Uji BLE dengan ESP32 tanpa Core
 
