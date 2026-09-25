@@ -839,7 +839,8 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
         return make_frame(seq, "ACK,PONG_R9", response, response_size);
 
     if (strcmp(cmd, "GET") == 0) {
-        char body[220];
+        /* CAPS v7 + sequence + CRC fits the 256-byte BLE TX frame. */
+        char body[240];
         const char *what = strtok_r(NULL, ",", &save);
         int n;
         if (what != NULL && strcmp(what, "STATUS") == 0) {
