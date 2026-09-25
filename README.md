@@ -1,147 +1,374 @@
 # IgniTra CDI ESP32 R9 Modular
 
-Firmware ESP-IDF untuk PCB IgniTra CDI berbasis ESP32-WROOM-32 DevKit 38-pin. Desain dasar menjalankan satu kanal pengapian CENTER; kanal SIDE, thermal/fan, OEM Learn, AUX, dan TPS diagnostic dipasang sebagai modul firmware opsional. Semua modul tersebut menggunakan bit konfigurasi independen dan dapat dipasang bersamaan; pilihan Core/Dual hanya menentukan kanal pengapian. Receiver Bluetooth audio adalah aksesori aplikasi terpisah dan tidak masuk bit firmware.
+Firmware ESP-IDF untuk IgniTra CDI berbasis ESP32-WROOM-32 DevKit 38-pin. Core menjalankan satu kanal pengapian CENTER; SIDE, THERMAL/FAN, OEM Learn, AUX, dan TPS Diagnostic adalah modul opsional yang dapat dipasang bersamaan.
 
-Firmware mempertahankan protokol aplikasi lama sambil menambahkan informasi hardware modular secara additive. Tidak ada UUID BLE, ukuran paket telemetri, atau perintah lama yang diubah.
+README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kontrak aplikasi, pin/net, header modul, BOM, setup, build, uji dan keselamatan.
 
-## Status dan sumber kode aktif
+## Status rilis
 
-Entry point build adalah `main/main.c`. Berkas aktif melalui `main/CMakeLists.txt`:
-
-- `cdi_board_esp32.*`: pin, GPIO, ADC1, PWM charger dan akses hardware.
-- `cdi_timebase.*`: penjadwalan pengapian berbasis GPTimer.
-- `cdi_engine_esp32.*`: integrasi ISR pickup, CENTER/SIDE, charger, fan dan telemetri.
-- `cdi_r5.*`: map, limiter dan keputusan pengapian.
-- `cdi_r5_protocol.*`: protokol aplikasi versi 5.
-- `cdi_r5_ble.*` dan `cdi_ble_nimble.*`: paket BLE versi 3 dan GATT.
-- `cdi_r8_oem_learn.*`: perekaman referensi pengapian OEM.
-- `cdi_r8_ota.*`: OTA.
-
-`main/cdi_firmware.c` dan `main/cdi_firmware.h` adalah eksperimen portable lama dan **tidak ikut dikompilasi**. Developer tidak boleh memakai keduanya sebagai referensi aplikasi atau hardware.
-
-Referensi aplikasi lengkap: [docs/APP_FIRMWARE_REFERENCE.md](docs/APP_FIRMWARE_REFERENCE.md).
-Buku petunjuk produk: [docs/BUKU_PETUNJUK_PENGGUNA.md](docs/BUKU_PETUNJUK_PENGGUNA.md).
-
-## Kontrak pin ESP32 dan skematik
-
-Tabel ini mengikuti simbol U1 pada skematik `SCH_IGNITRA_CDI_ESP32_R9_TEST_2026-09-22(1).json`. Nomor U1 adalah nomor fisik header DevKit, bukan nomor GPIO.
-
-| U1 | GPIO/power | NetLabel | Arah | Fungsi |
-|---:|---|---|---|---|
-| 1 | 3V3 | `3V3` | Power | Catu logika 3,3 V |
-| 3 | GPIO36/ADC1_CH0 | `TPS_ADC` | Input | TPS utama |
-| 4 | GPIO39/ADC1_CH3 | `TEMP_ADC` | Input | Suhu opsional |
-| 5 | GPIO34/ADC1_CH6 | `TPS_REF_ADC` | Input | Referensi TPS opsional |
-| 6 | GPIO35/ADC1_CH7 | `HV_C_ADC` | Input | Feedback HV CENTER |
-| 7 | GPIO32/ADC1_CH4 | `HV_S_ADC` | Input | Feedback HV SIDE opsional |
-| 8 | GPIO33/ADC1_CH5 | `VBAT_ADC` | Input | Tegangan aki |
-| 9 | GPIO25 | `GATE_C` | Output | Gate SCR CENTER |
-| 10 | GPIO26 | `GATE_S` | Output | Gate SCR SIDE opsional |
-| 11 | GPIO27 | `STROBE` | Output | Strobe opsional |
-| 12 | GPIO14 | `FAULT_N` | Input | Fault aktif-rendah |
-| 14 | GND | `GND_LOGIC` | Power | Ground logika |
-| 15 | GPIO13 | `FAN_CTL` | Output | Driver relay fan opsional |
-| 19 | 5V | `ESP_5V` | Power | Masuk 5 V melalui JP1 |
-| 20 | GND | `GND_LOGIC` | Power | Ground logika |
-| 21 | GPIO23 | `AUDIO_PWM` | Output | Reserved; firmware menahan LOW |
-| 26 | GND | `GND_LOGIC` | Power | Ground logika |
-| 27 | GPIO19 | `PWM_B` | Output | Charger TC4427 kanal B |
-| 28 | GPIO18 | `PWM_A` | Output | Charger TC4427 kanal A |
-| 29 | GPIO5 | `BENCH_LOOP` | Input | Test pad loopback, bukan jumper permanen |
-| 30 | GPIO17 | `OEM_SIDE` | Input | PC817 SIDE aktif-rendah |
-| 31 | GPIO16 | `OEM_CENTER` | Input | PC817 CENTER aktif-rendah |
-| 32 | GPIO4 | `PICKUP_DIG` | Input | Keluaran LM339 pickup |
-
-Pin lain pada DevKit tidak dipakai. Khusus ground: skematik memakai U1 pin 14, 20, dan 26; jangan menambahkan pin ground lain.
-
-Semua input analog memakai ADC1 karena ADC2 tidak dapat diandalkan ketika BLE aktif.
-
-## Jalur daya dan harness utama J1
-
-J1 memakai penomoran kolom kiri 1–6 dan kanan 7–12. Pada harness NS200 asli pin 1/8/9 tetap kosong sampai kabel tambahan dipasang.
-
-| Pin J1 | Net/fungsi |
-|---:|---|
-| 1 | `KEYLESS_REQ`: pulsa +12 V terproteksi, minimum 1,5 s |
-| 2 | `TPS_A` |
-| 3 | `TEMP_SENSOR` |
-| 4 | `TPS_B` |
-| 5 | `IGN_12V` |
-| 6 | `COIL_SIDE` |
-| 7 | `FAN_RELAY` |
-| 8 | `START_REQ`: dry-contact/open-collector ke GND_LOGIC |
-| 9 | `MODE_REQ`; menjadi `NEUTRAL_IN` pada UNIVERSAL_MANUAL |
-| 10 | `PICKUP_RAW` |
-| 11 | `GND_STAR` |
-| 12 | `COIL_CENTER` |
-
-DKEY_WAKE pada J1.1 hanya membangunkan buck/ESP32. Charger HV tetap tidak mendapat jalur IGN normal sampai relay K1 aktif. GND_LOGIC dan GND_POWER hanya bertemu pada star point Core.
-
-## Header modul
-
-Semua konektor memakai pitch 2,54 mm. Core memakai male THT dan modul memakai female long-tail stackable. Header 2×6 memakai kolom kiri 1–6/kanan 7–12; header 2×3 memakai baris 1–2, 3–4, 5–6.
-
-| Header | Pemetaan pin berurutan |
+| Item | Nilai dari source |
 |---|---|
-| JMOD_SIDE | 1 BRIDGE_PLUS; 2 SIDE_DET; 3 COIL_SIDE; 4 MOD_I2C_SDA; 5 GND_POWER; 6 MOD_I2C_SCL; 7 VIN_FILT; 8 GATE_S; 9 HV_S_FB; 10 GND_POWER; 11 3V3; 12 GND_LOGIC |
-| JMOD_THERMAL | 1 VIN_PROT; 2 GND_POWER; 3 5V_LOGIC; 4 GND_LOGIC; 5 3V3; 6 TEMP_SENSOR; 7 TEMP_ADC; 8 FAN_CTL; 9 FAN_RELAY; 10 THERMAL_DET; 11 MOD_I2C_SDA; 12 MOD_I2C_SCL |
-| JMOD_LEARN | 1 3V3; 2 GND_LOGIC; 3 OEM_CENTER; 4 OEM_SIDE; 5 GND_POWER; 6 LEARN_DET |
-| JMOD_AUX | 1 VIN_PROT; 2 GND_POWER; 3 5V_LOGIC; 4 GND_LOGIC; 5 3V3; 6 AUX_DET; 7 STROBE; 8 AUDIO_PWM; 9 MOD_I2C_SDA; 10 MOD_I2C_SCL; 11 EXP_IO1; 12 EXP_IO2 |
-| JMOD_TPS | 1 TPS_REF_RAW; 2 3V3; 3 GND_LOGIC; 4 TPS_REF_ADC; 5 TPS_DET; 6 TPS_SIG_RAW |
-| JMOD_EXP | 1 3V3; 2 GND_LOGIC; 3 5V_LOGIC; 4 GND_POWER; 5 VIN_PROT; 6 EXP_IO1; 7 MOD_I2C_SDA; 8 MOD_I2C_SCL; 9 EXP_IO2; 10 EXP_IO3; 11 FAULT_N; 12 STROBE |
+| Release | R9 |
+| Semantic version | 9.5.0 |
+| Build ID | 20260925 |
+| Platform | ESP32 klasik/WROOM-32 |
+| Protocol command | 5 |
+| Telemetry | v3, 20 byte |
+| Advertising BLE | NS200-CDI |
+| Map | 4 slot, maksimum 32×16 |
+| Batas format RPM | 30.000 RPM |
+| Batas advance | -30,0° sampai +80,0° |
+| PPR maksimum | 10 |
 
-Setiap modul SIDE/THERMAL/LEARN/AUX/TPS menarik DET masing-masing ke GND_LOGIC melalui 1 kΩ. SIDE/HV tetap memerlukan slot dan keepout; pitch pad 2,54 mm bukan pengganti creepage.
+Nilai source pada `main/cdi_r5_protocol.h` dan capability runtime adalah acuan, bukan nama folder atau dokumen lama.
 
-## Perilaku paket dasar dan modul
+## Source yang dikompilasi
 
-- Paket dasar bekerja sebagai CENTER-only. Charger hanya mengawasi HV CENTER ketika SIDE tidak diaktifkan; `HV_S_ADC=0` tidak memicu fault imbalance palsu.
-- SIDE baru ditembak ketika `side_enabled` aktif melalui READY THREE atau hasil OEM Learn yang valid.
-- Input pickup dan OEM tidak memakai pull-down internal karena PCB sudah memiliki pull-up eksternal. PC817 OEM dibaca pada falling edge karena keluarannya aktif-rendah.
-- Thermal AUTO memakai kalibrasi tiga titik. Jika kalibrasi/sensor tidak valid, output fan menyala sebagai fail-safe.
-- TPS utama tetap berfungsi tanpa modul TPS diagnostic.
-- AUDIO_PWM tetap reserved. GPIO23 dibuat output LOW agar tidak mengambang.
+Entry point: `main/main.c`.
 
-### Receiver Bluetooth audio eksternal
+| File | Fungsi |
+|---|---|
+| `cdi_board_esp32.*` | GPIO, ADC1, PWM charger dan akses board |
+| `cdi_timebase.*` | penjadwalan pengapian GPTimer |
+| `cdi_engine_esp32.*` | ISR pickup, CENTER/SIDE, charger, fan, telemetry |
+| `cdi_r5.*` | map, limiter dan keputusan pengapian |
+| `cdi_r5_protocol.*` | command protocol v5 dan commissioning |
+| `cdi_r5_ble.*`, `cdi_ble_nimble.*` | GATT dan telemetry v3 |
+| `cdi_module_io.*` | PCF8574 U6/U7, DET dan AUX I/O |
+| `cdi_timing_modes.*` | STANDARD sampai CUSTOM |
+| `cdi_r8_oem_learn.*` | OEM Learn |
+| `cdi_r8_ota.*` | OTA |
+| `cdi_selftest.*` | uji servis; tidak boleh aktif permanen di kendaraan |
 
-Suara mesin dibuat aplikasi Android dari telemetry RPM. Jalurnya terpisah:
+Folder `build/` adalah hasil ESP-IDF dan tidak disimpan di Git. `sdkconfig.old`, log, ELF, MAP dan binary lokal juga bukan sumber kebenaran.
 
-    ESP32 CDI --BLE telemetry--> Android
-    Android --Classic Bluetooth A2DP--> receiver audio --> amplifier/speaker
+## GPIO ESP32
 
-Receiver harus mendukung A2DP; modul BLE-only tidak menerima audio media.
-Aplikasi menyimpan pilihan bahwa receiver dipasang sebagai AccessoryConfig
-lokal per Serial CDI. Status paired/connected/rute aktif berasal dari Android,
-bukan firmware atau GET,MODULES.
+Gunakan nama net dan GPIO; nomor header fisik DevKit harus dicocokkan dengan board 38-pin yang benar sebelum membuat footprint.
 
-BLE CDI dan A2DP dapat aktif bersamaan. Untuk mengurangi gangguan, pisahkan
-antena receiver dari ESP32/trafo/coil, gunakan decoupling catu lokal, dan
-jangan mengambil arus amplifier dari pin 3V3 ESP32.
+| GPIO | Net | Arah/fungsi |
+|---:|---|---|
+| 36 / ADC1_CH0 | TPS_ADC | TPS utama |
+| 39 / ADC1_CH3 | TEMP_ADC | suhu opsional |
+| 34 / ADC1_CH6 | TPS_REF_ADC | referensi TPS diagnostic |
+| 35 / ADC1_CH7 | HV_C_ADC | feedback HV CENTER |
+| 32 / ADC1_CH4 | HV_S_ADC | feedback HV SIDE |
+| 33 / ADC1_CH5 | VBAT_ADC | tegangan aki |
+| 25 | GATE_C | SCR CENTER |
+| 26 | GATE_S | SCR SIDE |
+| 27 | STROBE | output strobe |
+| 14 | FAULT_N | fault aktif-rendah |
+| 13 | FAN_CTL | driver coil relay fan |
+| 23 | AUDIO_PWM | reserved, ditahan LOW |
+| 19 | PWM_B | TC4427 kanal B |
+| 18 | PWM_A | TC4427 kanal A |
+| 5 | BENCH_LOOP | test pad, bukan jumper permanen |
+| 17 | OEM_SIDE | PC817 aktif-rendah |
+| 16 | OEM_CENTER | PC817 aktif-rendah |
+| 4 | PICKUP_DIG | keluaran comparator pickup |
+| 21 | MOD_I2C_SDA | U6/U7 PCF8574P |
+| 22 | MOD_I2C_SCL | U6/U7 PCF8574P |
 
-## Kompatibilitas aplikasi lama
+Semua input analog memakai ADC1 karena ADC2 tidak stabil ketika BLE aktif. Catu DevKit adalah 5V_LOGIC melalui jumper power dan 3V3 dari regulator board. GND_LOGIC dan GND_POWER hanya bertemu pada titik star/net-tie yang ditentukan skematik.
 
-Kontrak berikut tidak berubah:
+## Harness utama J1
 
-- Advertising BLE: `NS200-CDI`.
-- Service UUID: `7a8f1000-6c9d-4e40-a45f-0b4b4e533230`.
-- Telemetry/Command/Response UUID lama tetap sama.
-- Telemetri biner versi 3 tetap 20 byte dan bergantian CORE/DIAGNOSTIC.
-- Frame tetap `@sequence,COMMAND,args*CRC16`.
-- Empat slot map dan perintah `SETUP`, `LIVE`, `LIMIT`, `LOAD`, serta `SAVE` tetap tersedia.
+Header J1 2×6 memakai kolom kiri 1–6 dan kanan 7–12.
 
-Tambahan untuk aplikasi baru:
+| J1 | Net | Fungsi |
+|---:|---|---|
+| 1 | KEYLESS_REQ | pulsa +12 V terproteksi untuk wake/toggle keyless |
+| 2 | TPS_A | sensor TPS |
+| 3 | TEMP_SENSOR | sensor suhu |
+| 4 | TPS_B | sensor TPS |
+| 5 | IGN_12V | kontak mekanis/masukan daya normal |
+| 6 | COIL_SIDE | keluaran coil SIDE |
+| 7 | FAN_RELAY | coil relay fan OEM |
+| 8 | START_REQ | dry-contact/open-collector ke GND_LOGIC |
+| 9 | MODE_REQ / NEUTRAL_IN | profil manual memakai netral aktif-rendah |
+| 10 | PICKUP_RAW | pickup mesin |
+| 11 | GND_STAR | return daya kendaraan |
+| 12 | COIL_CENTER | keluaran coil CENTER |
 
-- `GET,INFO`
-- `GET,VERSION` untuk release, semantic version, build ID dan versi protokol.
-- `GET,IDENTITY` untuk serial unik ESP32 dan kebijakan binding aplikasi.
-- `GET,HARDWARE` atau `GET,HW`
-- `GET,ADC`
-- `GET,MODULES` untuk konfigurasi, aktivitas, bukti sinyal dan fault modul.
-- `GET,COMMISSION` untuk menentukan langkah setup berikutnya.
-- `SETUP,INSTALL,CORE|DUAL,OEM_REMOVED` untuk ganti CDI OEM langsung.
+Pada harness NS200 standar, J1.1/J1.8/J1.9 tetap NC sampai kabel tambahan dipasang. J1.5 tidak boleh diubah menjadi ground atau status keyless sintetis: firmware membaca kontak mekanis secara terpisah melalui U7/P3.
 
-`GET,TEMP` sekarang membaca status suhu/fan aktual yang sama dengan telemetri.
+## Header modul Rev C
 
-## Build dan flashing ESP-IDF
+Core memakai male THT dan modul memakai female 2,54 mm; gunakan female long-tail hanya bila benar-benar ditumpuk. Header 2×6: kolom kiri 1–6 dan kanan 7–12. Header 2×3: baris 1–2, 3–4, 5–6.
+
+### JMOD_SIDE 2×6
+
+| Pin | Net | Pin | Net |
+|---:|---|---:|---|
+| 1 | BRIDGE_PLUS | 7 | VIN_FILT |
+| 2 | SIDE_DET | 8 | GATE_S |
+| 3 | COIL_SIDE | 9 | HV_S_FB |
+| 4 | MOD_I2C_SDA | 10 | GND_POWER |
+| 5 | GND_POWER | 11 | 3V3 |
+| 6 | MOD_I2C_SCL | 12 | GND_LOGIC |
+
+### JMOD_THERMAL 2×6
+
+| Pin | Net | Pin | Net |
+|---:|---|---:|---|
+| 1 | VIN_PROT | 7 | TEMP_ADC |
+| 2 | GND_POWER | 8 | FAN_CTL |
+| 3 | 5V_LOGIC | 9 | FAN_RELAY |
+| 4 | GND_LOGIC | 10 | THERMAL_DET |
+| 5 | 3V3 | 11 | MOD_I2C_SDA |
+| 6 | TEMP_SENSOR | 12 | MOD_I2C_SCL |
+
+### JMOD_LEARN 2×3
+
+| Pin | Net | Pin | Net |
+|---:|---|---:|---|
+| 1 | 3V3 | 2 | GND_LOGIC |
+| 3 | OEM_CENTER | 4 | OEM_SIDE |
+| 5 | GND_POWER | 6 | LEARN_DET |
+
+### JMOD_AUX 2×6
+
+| Pin | Net | Pin | Net |
+|---:|---|---:|---|
+| 1 | VIN_PROT | 7 | STROBE |
+| 2 | GND_POWER | 8 | AUDIO_PWM |
+| 3 | 5V_LOGIC | 9 | MOD_I2C_SDA |
+| 4 | GND_LOGIC | 10 | MOD_I2C_SCL |
+| 5 | 3V3 | 11 | EXP_IO1 |
+| 6 | AUX_DET | 12 | EXP_IO2 |
+
+### JMOD_TPS 2×3
+
+| Pin | Net | Pin | Net |
+|---:|---|---:|---|
+| 1 | TPS_REF_RAW | 2 | 3V3 |
+| 3 | GND_LOGIC | 4 | TPS_REF_ADC |
+| 5 | TPS_DET | 6 | TPS_SIG_RAW |
+
+### JMOD_EXP 2×6
+
+| Pin | Net | Pin | Net |
+|---:|---|---:|---|
+| 1 | 3V3 | 7 | MOD_I2C_SDA |
+| 2 | GND_LOGIC | 8 | MOD_I2C_SCL |
+| 3 | 5V_LOGIC | 9 | EXP_IO2 |
+| 4 | GND_POWER | 10 | EXP_IO3 |
+| 5 | VIN_PROT | 11 | FAULT_N |
+| 6 | EXP_IO1 | 12 | STROBE |
+
+SIDE/THERMAL/LEARN/AUX/TPS wajib memasang resistor DET 1 kΩ dari DET ke GND_LOGIC. Core memakai pull-up 10 kΩ. Jangan menghubungkan DET ke GND_POWER.
+
+## Deteksi modul dan AUX I/O
+
+### U6 PCF8574P alamat 0x20
+
+| Port | Fungsi |
+|---:|---|
+| P0 | SIDE_DET |
+| P1 | THERMAL_DET |
+| P2 | LEARN_DET |
+| P3 | AUX_DET |
+| P4 | TPS_DET |
+| P5 | EXP_IO1 / keyless control |
+| P6 | EXP_IO2 / starter trigger |
+| P7 | EXP_IO3 |
+
+DET aktif-rendah dan didebounce. Modul yang dilepas langsung hilang dari present/active; bila masih configured, firmware memberi fault/peringatan.
+
+### U7 PCF8574P alamat 0x21
+
+| Port | Fungsi |
+|---:|---|
+| P0 | KEYLESS_REQ_N |
+| P1 | START_REQ_F |
+| P2 | MODE_REQ_F / NEUTRAL_IN |
+| P3 | IGN_SW_N, posisi kontak mekanis J1.5 |
+
+Output relay harus safe-default OFF saat boot/I²C gagal. K2 starter wajib melewati NE555 one-shot; output PCF tidak boleh langsung menahan transistor relay.
+
+## Blok penempatan PCB
+
+| Blok | Isi utama | Aturan penempatan |
+|---|---|---|
+| C1 daya/harness | J1, reverse diode, TVS, L_IN, C_IN, MP1584, star | aliran J1→proteksi→filter→buck pendek |
+| C2 logic/I²C | ESP32, U6, U7, pull-up, header modul | jauh dari trafo, SCR dan coil |
+| C3 sensor | LM339, pickup, TPS, suhu, VBAT, clamp | tidak dilintasi PWM/HV/relay |
+| C4 charger | TC4427, MOSFET, EE35, shunt, rectifier | loop arus pendek dan lebar |
+| C5 CENTER HV | MKP, SCR, diode, divider feedback | satu zona HV ber-slot/keepout |
+| SIDE HV | MKP, SCR, driver, feedback | creepage dari I²C/DET dan logic |
+| THERMAL | conditioner suhu, TIP122, flyback | TIP122 hanya menggerakkan coil relay OEM |
+| OEM Learn | resistor input dan PC817 | pisahkan sisi input dari logic |
+| AUX | K1, K2, NE555, strobe, terminal | pisahkan relay/starter dari analog |
+
+Net BRIDGE_PLUS, HV_CENTER, HV_SIDE, COIL_CENTER dan COIL_SIDE tidak boleh dirutekan di bawah ESP32, comparator, I²C atau input analog. Pitch header 2,54 mm tidak menggantikan creepage; gunakan slot, keepout dan coating sesuai lingkungan.
+
+## Komponen utama dan alternatif
+
+| Fungsi | Utama | Alternatif yang diperbolehkan |
+|---|---|---|
+| MCU | ESP32 DevKitC 38-pin | board 38-pin dengan pinout identik |
+| Comparator | LM339N DIP-14 | LM2901N |
+| Gate driver | TC4427AEPA DIP-8 | MIC4427, pinout diverifikasi |
+| I/O expander | PCF8574P DIP-16 | PCF8574AP hanya jika alamat firmware diubah |
+| Charger MOSFET | IRFB4110 | N-MOSFET 100 V, RDS(on) ≤8 mΩ, G-D-S |
+| SCR | BT151-800R | BT152-800R setelah pinout/rating diperiksa |
+| Relay AUX | Omron G8NB-1U 12 V | relay automotive PCB setara, footprint disesuaikan |
+| Fan driver | TIP122 | TIP120/121 bila rating cukup |
+| Optocoupler | PC817 | EL817 DIP-4 |
+| Rectifier cepat | UF4007 | HER108/FR107 sesuai rating |
+| Clamp THT | BAT85 | BAT43/1N5819 setelah leakage diperiksa |
+| Kapasitor CDI | MKP 1 µF 630 V | CBB22 105J 630 V dengan pitch nyata |
+| Header | 2×6/2×3 2,54 mm | female long-tail untuk stack-through |
+
+Nilai generik seperti `68 Ω 1 W` boleh dipakai pada nama simbol, tetapi footprint harus mengikuti body dan pitch komponen yang dibeli. Untuk resistor 68 Ω 1 W gunakan axial body sekitar 9–11 mm/pitch sekitar 15,24 mm bila sesuai barang nyata.
+
+## BOM pembelian ringkas
+
+Jumlah berikut menyediakan cadangan solder/rework.
+
+| Item | Jumlah beli |
+|---|---:|
+| 10 kΩ ¼ W metal-film | 30 |
+| 1 kΩ ¼ W metal-film | 25 |
+| 4,7 kΩ ¼ W | 15 |
+| 100 kΩ ¼ W | 10 |
+| 270 kΩ dan 470 kΩ ½ W | masing-masing 10 |
+| 33 kΩ ½ W | 10 |
+| 68 Ω 1 W | 2 |
+| BAT85 | 20 |
+| UF4007/HER108 | 12 |
+| 1N4148 | 10 |
+| BC337, 2N3904, 2N3906 | masing-masing 5 |
+| TIP122 | 2 |
+| IRFB4110 | 3 |
+| IRLZ44N | 2 |
+| BT151-800R | 3 |
+| PC817/EL817 | 4 |
+| LM339N/LM2901N | 2 |
+| TC4427A/MIC4427 | 2 |
+| PCF8574P | 3 |
+| NE555P | 2 |
+| G8NB-1U 12 V | 3 |
+| MKP/CBB22 1 µF 630 V | 3 |
+| Elco 470 µF 50 V 105 °C low-ESR | 2 |
+| 100 nF dan 10 nF | masing-masing 15 |
+| male/female 2×6 2,54 mm | masing-masing 4 |
+| male/female 2×3 2,54 mm | masing-masing 3 |
+
+AUX juga memerlukan QPRE safe-default, R timing 2,2 MΩ 1%, C timing 1 µF X7R ±20%, diode clamp, terminal 5,08 mm dan proteksi input request. Nominal one-shot K2 adalah `t = 1,1RC = 2,42 s`; worst-case R +1% dan C +20% sekitar 2,93 s.
+
+## Kontrak BLE
+
+### UUID
+
+| Fungsi | UUID |
+|---|---|
+| Service | `7a8f1000-6c9d-4e40-a45f-0b4b4e533230` |
+| Telemetry notify | `7a8f1001-6c9d-4e40-a45f-0b4b4e533230` |
+| Command write | `7a8f1002-6c9d-4e40-a45f-0b4b4e533230` |
+| Response notify | `7a8f1003-6c9d-4e40-a45f-0b4b4e533230` |
+| OTA data | `7a8f1004-6c9d-4e40-a45f-0b4b4e533230` |
+| OTA status | `7a8f1005-6c9d-4e40-a45f-0b4b4e533230` |
+
+Frame command:
+
+```text
+@sequence,COMMAND,arg1,arg2*CRC16\n
+```
+
+CRC16-CCITT polynomial 0x1021, initial 0xFFFF, dihitung dari sequence sampai argumen terakhir. Queue aplikasi mengirim satu command sampai ACK/ERR/query response diterima.
+
+### Respons penting
+
+```text
+INFO,ESP32,R9,5,3,IGNITRA_R9_MODULAR
+VERSION,1,R9,9.5.0,20260925,ESP32,5,3
+IDENTITY,1,<serial>,SERIAL_V1,LOCAL_APP,0
+CAPS,7,30000,-300,800,32,16,4,10,...
+MODULES,2,presentMask,activeMask,observedMask,faultMask,coreProfile,configuredMask,ioOk
+TIMING,2,mode,intensity,minRpm,maxRpm
+AUX,3,keylessOn,starterOn,auxPresent,inputEnabled,profile,requestMask,requestIoOk,mechanicalOn,contactSource,engineRunning,ignitionAllowed
+```
+
+Bit MODULES: SIDE=1, THERMAL=2, OEM_LEARN=4, AUX=8, TPS_DIAG=16.
+
+### Telemetry v3
+
+Paket 20 byte little-endian, magic 0xCD15, sequence pada offset 4 dan CRC16 byte 0–17 pada offset 18.
+
+- CORE: RPM, TPS permille, advance centidegree, aki centivolt, HV CENTER dan HV SIDE.
+- DIAGNOSTIC: suhu, slot, limiter mode, flags, output flags, fault, trigger, pickup quality dan First Start timer.
+
+UUID, paket v3 dan arti bit lama tidak boleh diubah diam-diam. Fitur baru harus additive, memakai schema, dan diiklankan CAPS.
+
+## Timing modes
+
+```text
+SET,TIMING,mode,intensity,minRpm,maxRpm
+GET,TIMING
+```
+
+| Mode | ID |
+|---|---:|
+| STANDARD | 0 |
+| SOFT | 1 |
+| RESPONSIVE | 2 |
+| KUDA | 3 |
+| DRUMBAND | 4 |
+| FOMO | 5 |
+| CUSTOM | 6 |
+
+Intensity 0–10, jendela 500–5000 RPM, hanya TPS rendah, dan hasil tetap dijepit PROFILE/map. KUDA/DRUMBAND/FOMO adalah efek idle/show, bukan map daya.
+
+## AUX, kontak dan starter
+
+Konfigurasi:
+
+```text
+AUX,CONFIG,NS200,ON
+AUX,CONFIG,MANUAL,ON
+AUX,CONFIG,MATIC,ON
+```
+
+Kontrol:
+
+```text
+AUX,KEYLESS,ON
+AUX,KEYLESS,OFF
+AUX,START,PULSE,100..3000
+AUX,ALL,OFF
+GET,AUX
+```
+
+Aturan:
+
+1. CONTACT ON memberi izin pengapian sebelum K1 aktif.
+2. Starter ditolak jika AUX tidak present/enabled, kontak tidak aktif, tegangan/fault tidak aman, RPM terlalu tinggi, atau I²C gagal.
+3. UNIVERSAL_MANUAL juga mewajibkan NEUTRAL_IN.
+4. K2 dilepas pada timeout, RPM ≥500, fault, tegangan tidak aman, I²C gagal atau modul dilepas.
+5. CONTACT OFF menjalankan K2 OFF → spark/charger HV OFF → K1 OFF.
+6. Aplikasi wajib membaca GET,AUX dan GET,STATUS setelah ACK.
+
+Kontak mekanis tetap dapat menyalakan/mematikan mesin tanpa aplikasi. Firmware melaporkan sumber OFF, MECHANICAL atau KEYLESS sehingga aplikasi menampilkan tombol KONTAK ON, START ENGINE atau STOP ENGINE sesuai keadaan nyata.
+
+## Setup pengguna
+
+1. Lepas CDI OEM dan pasang IgniTra.
+2. Pilih Core atau Dual menggunakan `SETUP,INSTALL,...,OEM_REMOVED`.
+3. Starter untuk memverifikasi pickup.
+4. Simpan edge/PPR/gate yang benar.
+5. Kalibrasi TDC nyata.
+6. Kalibrasi TPS CLOSED dan OPEN.
+7. Jalankan FIRST START; batas sementara 3.000 RPM/10°.
+8. Matikan mesin, tunggu RPM 0 dan HV <30 V.
+9. Simpan READY CENTER atau READY DUAL.
+10. Kalibrasi suhu sebelum FAN AUTO.
+
+OEM Learn hanya opsi lanjutan. TPS utama tetap bekerja tanpa modul TPS Diagnostic. Thermal tanpa sensor/kalibrasi valid menyalakan fan secara fail-safe.
+
+## Build dan flashing
+
+Prasyarat: ESP-IDF sesuai project, Python/toolchain aktif, target ESP32 klasik.
 
 ```bash
 idf.py set-target esp32
@@ -149,65 +376,38 @@ idf.py build
 idf.py -p COMx flash monitor
 ```
 
-Jika `sdkconfig.defaults` diubah dan konfigurasi lama masih tersimpan, lakukan konfigurasi ulang dari ESP-IDF sebelum build. Folder `build/` bukan sumber kebenaran dan boleh dibuat ulang oleh ESP-IDF.
+Jika `sdkconfig.defaults` berubah dan konfigurasi lokal lama masih tersimpan, lakukan reconfigure/clean sesuai ESP-IDF. Jangan commit folder `build/`.
 
-## Setup minimum
+## Uji sebelum kendaraan
 
-Setup pengguna terdiri dari **Pemasangan**, **Pemeriksaan**, dan **First
-Start/Ready**. OEM Learn tidak diperlukan untuk pemasangan normal.
+1. Pastikan `BENCH_TEST_MODE=0` untuk firmware kendaraan.
+2. Pastikan pemanggilan self-test loopback tidak aktif di `main.c`.
+3. Lepas jumper BENCH_LOOP.
+4. Verifikasi output gate tetap OFF ketika pickup tidak valid.
+5. Verifikasi CENTER-only tidak membuat fault SIDE palsu.
+6. Verifikasi pelepasan setiap modul menghapus present/active dan mematikan output terkait.
+7. Verifikasi fan AUTO fail-safe ketika sensor invalid.
+8. Verifikasi kontak mekanis ON/OFF tanpa aplikasi.
+9. Verifikasi KEYLESS ON, START, STOP dan batas one-shot K2.
+10. Untuk motor manual, verifikasi starter ditolak ketika NEUTRAL_IN tidak aktif.
+11. Pastikan RPM 0 dan HVC/HVS <30 V sebelum mengubah konfigurasi atau melepas modul.
 
-1. Lepas CDI OEM, pasang IgniTra, lalu pilih Core atau Dual memakai
-   `SETUP,INSTALL,CORE|DUAL,OEM_REMOVED`.
-2. Starter untuk membaca pickup; setelah RPM nol dan HV <30 V, simpan pickup.
-3. Kalibrasi TDC nyata. Nilai UNIVERSAL bukan preset kendaraan.
-4. Kalibrasi TPS CLOSED dan OPEN.
-5. Jalankan FIRST START; firmware membatasi 3.000 RPM dan advance 10°.
-6. Setelah mesin dimatikan, pilih READY CENTER.
-7. Dual Coil memerlukan modul SIDE dan offset valid sebelum READY DUAL/THREE.
-8. Kalibrasi suhu sebelum FAN AUTO.
+## Keselamatan produksi
 
-Panduan bench test berada di [main/INSTRUKSI.md](main/INSTRUKSI.md). `BENCH_TEST_MODE` harus `0` dan self-test loopback harus dilepas untuk pemasangan kendaraan.
+- Tegangan CDI/HV dapat berbahaya walau mesin telah dimatikan; ukur dan discharge dengan prosedur benar.
+- Jangan memasukkan 12 V, pickup mentah atau tegangan coil langsung ke GPIO.
+- FAN_RELAY hanya menggerakkan coil relay OEM; arus motor fan memakai kontak relay, kabel dan sekring OEM.
+- K2 hanya memparalel tombol/coil relay starter, bukan arus dinamo starter.
+- Pertahankan interlock netral/kopling/standar samping OEM.
+- Jangan menyatukan GND_LOGIC dan GND_POWER di luar star point.
+- Gunakan komponen 105 °C, margin tegangan/arus memadai, sambungan tahan getaran, coating dan creepage HV.
+- Produksi PCB tetap memerlukan ERC/DRC, pemeriksaan footprint terhadap komponen nyata, review Gerber, prototype dan uji kendaraan bertahap.
 
-## Keselamatan
+## Aturan pemeliharaan
 
-- Net `BRIDGE_PLUS`, `HV_CENTER`, `HV_SIDE`, `COIL_CENTER`, dan `COIL_SIDE` membawa tegangan/pulsa berbahaya.
-- Jangan pernah memasukkan 12 V atau tegangan koil langsung ke GPIO ESP32.
-- `FAN_RELAY` hanya mengendalikan kumparan relay; arus motor kipas tidak melewati GPIO atau transistor kecil modul.
-- Pisahkan `GND_POWER` dan `GND_LOGIC` sesuai NT1/NT2 pada skematik; jangan mengganti net-tie dengan jumper pengguna.
-- Pengujian kendaraan wajib dilakukan bertahap dengan pembatas arus dan pengukuran HV yang sesuai.
+1. README ini adalah dokumentasi tunggal firmware dan hardware.
+2. Perubahan pin harus memperbarui `cdi_board_esp32.h`, skematik, aplikasi dan README.
+3. Perubahan protokol harus additive serta memiliki parser/test aplikasi.
+4. EFI belum menjadi capability R9.
+5. Folder build, binary, log dan patch sementara tidak boleh disimpan di repository.
 
-## Checklist developer berikutnya
-
-Jika pin, fitur, atau paket aplikasi diubah, perbarui bersama-sama:
-
-1. `main/cdi_board_esp32.h`.
-2. Implementasi engine/protocol terkait.
-3. Skematik EasyEDA dan pin header modul.
-4. Tabel README ini.
-5. `docs/APP_FIRMWARE_REFERENCE.md`.
-
-Jangan menggunakan nama pin STM32 (`PA0`, `PB3`, dan sejenisnya) sebagai sumber hardware ESP32. Gunakan NetLabel skematik dan konstanta `CDI_PIN_*` native.
-
-
-## Rev C module detection and timing presets (R9.3)
-
-- GPIO21/GPIO22 operate PCF8574P U6 at 0x20.
-- P0..P4 read SIDE/THERMAL/OEM_LEARN/AUX/TPS DET, active-low and debounced.
-- Removing a module clears its runtime installed/active state and disables the related output.
-- P5/P6 drive AUX keyless/starter through mandatory active-low PNP pre-drivers; power-up HIGH is OFF.
-- Timing presets are STANDARD, SOFT, RESPONSIVE and KUDA. KUDA is restricted to the configured low-RPM/low-TPS window.
-- Firmware source was updated only; no build artifact was generated.
-
-See [hardware block/BOM guide](docs/HARDWARE_REV_C_BLOCKS_BOM.md) and [app/firmware reference](docs/APP_FIRMWARE_REFERENCE.md).
-
-## Rev C Freeze 3 — physical contact/keyless/starter
-
-- U6 PCF8574P alamat 0x20 menangani DET dan output AUX; U7 alamat 0x21 membaca KEYLESS_REQ, START_REQ, MODE_REQ/NEUTRAL_IN, serta posisi kontak mekanis J1.5 pada P3.
-- J1.5 tetap jalur kontak mekanis mentah. K1 menghubungkan BAT_FUSED_IN ke VIN_PROT sesudah J1.5/DREV, sehingga relay hold tidak memalsukan status kontak fisik.
-- `AUX,KEYLESS,ON` memberi izin pengapian dan mengaktifkan K1. `AUX,START,PULSE,100..3000` mengaktifkan K2 sementara; K2 lepas saat RPM ≥500 atau terjadi fault.
-- `AUX,KEYLESS,OFF` dan `AUX,ALL,OFF` menjalankan CONTACT OFF: K2 OFF, spark/HV OFF, lalu K1 OFF.
-- K2 juga dibatasi U8 NE555 one-shot: 2.42 s nominal dan sekitar 2.93 s worst-case, sehingga PCF/I²C yang macet LOW tidak dapat menahan starter terus-menerus.
-- UNIVERSAL_MANUAL menolak starter tanpa NEUTRAL_IN. UNIVERSAL_MATIC tidak mewajibkan netral. Interlock OEM tetap harus dipertahankan.
-- `GET,AUX` schema 3 melaporkan sumber kontak OFF/MECHANICAL/KEYLESS, posisi mekanis, izin pengapian, dan status mesin. Aplikasi memakai data ini untuk tombol tunggal KONTAK ON / START ENGINE / STOP ENGINE.
-- Timing schema 2 menambah DRUMBAND, FOMO, dan CUSTOM di samping STANDARD, SOFT, RESPONSIVE, serta KUDA.
-- Source firmware saja yang diperbarui; belum dibuild dan belum dijadikan artefak produksi.
