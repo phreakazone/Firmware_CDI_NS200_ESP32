@@ -861,7 +861,7 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->tps_closed_adc,s->tps_open_adc,s->first_start_hv_volts,s->center_enabled,s->side_enabled,s->fan_mode,p->pickup_quality);
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
-                "CAPS,7,30000,-300,800,32,16,4,10,FAN,DYNO,PROFILE,OEM_LEARN,MODULE_STATUS,TIMING_PRESETS,AUX_INPUTS_U7,QUICK_INSTALL,MECHANICAL_CONTACT_SENSE,ENGINE_CONTROL_ONE_BUTTON");
+                "CAPS,7,30000,-300,800,32,16,4,12,FAN,DYNO,PROFILE,OEM_LEARN,MODULE_STATUS,TIMING_PRESETS,AUX_INPUTS_U7,QUICK_INSTALL,MECHANICAL_CONTACT_SENSE,ENGINE_CONTROL_ONE_BUTTON,UNIVERSAL_CDI,SIGNED_LIVE,HV_TARGET_MAX_345V");
         } else if (what != NULL && strcmp(what, "INFO") == 0) {
             /* Additive query: existing commands/UUID/telemetry remain unchanged. */
             n=snprintf(body,sizeof(body),
@@ -1021,15 +1021,17 @@ if (strcmp(cmd,"MAP")==0) {
         return make_frame(seq,p->pro_enabled?"ACK,PRO_ON":"ACK,PRO_OFF",response,response_size);
     }
 
-    if (strcmp(cmd, "LIVE") == 0 &&
-        parse_uint(strtok_r(NULL, ",", &save), CDI_R5_TPS_POINTS - 1u, &a) &&
-        parse_uint(strtok_r(NULL, ",", &save), CDI_R5_RPM_POINTS - 1u, &b) &&
-        parse_uint(strtok_r(NULL, ",", &save), CDI_R9_ADVANCE_MAX_CDEG, &c)) {
+    if (strcmp(cmd, "LIVE") == 0) {
+        long live_cdeg;
+        if (!parse_uint(strtok_r(NULL, ",", &save), CDI_R5_TPS_POINTS - 1u, &a) ||
+            !parse_uint(strtok_r(NULL, ",", &save), CDI_R5_RPM_POINTS - 1u, &b) ||
+            !parse_int(strtok_r(NULL, ",", &save), CDI_R9_ADVANCE_MIN_CDEG,
+                       CDI_R9_ADVANCE_MAX_CDEG, &live_cdeg))
+            return error_frame(seq, "LIVE", response, response_size);
         cdi_r5_status_t s = cdi_r5_live_set_cell(&p->working, (uint8_t)a,
-            (uint8_t)b, (int16_t)c, p->rpm != 0u, p->pro_enabled);
+            (uint8_t)b, (int16_t)live_cdeg, p->rpm != 0u, p->pro_enabled);
         return s == CDI_R5_OK ? make_frame(seq, "ACK,LIVE", response, response_size) :
-            error_frame(seq, s == CDI_R5_ERR_LIVE_STEP ? "STEP_MAX_2DEG" : "MAP",
-                        response, response_size);
+            error_frame(seq, "MAP", response, response_size);
     }
 
     if (strcmp(cmd, "LIMIT") == 0) {
