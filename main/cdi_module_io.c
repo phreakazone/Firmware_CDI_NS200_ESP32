@@ -2,8 +2,7 @@
 #include "cdi_board_esp32.h"
 #include "cdi_r5.h"
 
-#include "driver/i2c.h"
-#include "freertos/FreeRTOS.h"
+#include "driver/i2c_master.h"
 #include <string.h>
 
 #define MOD_I2C_PORT I2C_NUM_0
@@ -12,17 +11,65 @@
 #define EXP1_BIT (1u << 5)
 #define EXP2_BIT (1u << 6)
 #define EXP3_BIT (1u << 7)
-#define IO_TIMEOUT pdMS_TO_TICKS(5)
+#define IO_TIMEOUT_MS 5
 
-static esp_err_t write_byte(uint8_t address, uint8_t value)
+static i2c_master_bus_handle_t s_bus;
+static i2c_master_dev_handle_t s_u6;
+static i2c_master_dev_handle_t s_u7;
+
+static esp_err_t add_device(uint8_t address, i2c_master_dev_handle_t *device)
 {
-    return i2c_master_write_to_device(MOD_I2C_PORT, address,
-                                      &value, 1u, IO_TIMEOUT);
+    i2c_device_config_t config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = address,
+        .scl_speed_hz = 100000u,
+    };
+    return i2c_master_bus_add_device(s_bus, &config, device);
+}
+
+static esp_err_t init_bus(void)
+{
+    if (s_bus != NULL && s_u6 != NULL && s_u7 != NULL) return ESP_OK;
+
+    i2c_master_bus_config_t config = {
+        .i2c_port = MOD_I2C_PORT,
+        .sda_io_num = CDI_PIN_MOD_I2C_SDA,
+        .scl_io_num = CDI_PIN_MOD_I2C_SCL,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7u,
+        .intr_priority = 0,
+        .trans_queue_depth = 0,
+        .flags.enable_internal_pullup = false,
+    };
+    esp_err_t err = i2c_new_master_bus(&config, &s_bus);
+    if (err != ESP_OK) return err;
+
+    err = add_device(CDI_MOD_I2C_ADDRESS, &s_u6);
+    if (err == ESP_OK) err = add_device(CDI_REQ_I2C_ADDRESS, &s_u7);
+    if (err == ESP_OK) return ESP_OK;
+
+    if (s_u7 != NULL) {
+        i2c_master_bus_rm_device(s_u7);
+        s_u7 = NULL;
+    }
+    if (s_u6 != NULL) {
+        i2c_master_bus_rm_device(s_u6);
+        s_u6 = NULL;
+    }
+    i2c_del_master_bus(s_bus);
+    s_bus = NULL;
+    return err;
+}
+
+static esp_err_t write_byte(i2c_master_dev_handle_t device, uint8_t value)
+{
+    if (device == NULL) return ESP_ERR_INVALID_STATE;
+    return i2c_master_transmit(device, &value, 1u, IO_TIMEOUT_MS);
 }
 
 static esp_err_t write_latch(const cdi_module_io_t *io)
 {
-    return write_byte(CDI_MOD_I2C_ADDRESS, io->output_latch);
+    return write_byte(s_u6, io->output_latch);
 }
 
 void cdi_aux_input_config_defaults(cdi_aux_input_config_t *config)
@@ -48,24 +95,12 @@ esp_err_t cdi_module_io_init(cdi_module_io_t *io)
     memset(io, 0, sizeof(*io));
     /* Both expanders power up HIGH. U6 EXP outputs therefore remain OFF. */
     io->output_latch = 0xffu;
-    i2c_config_t cfg = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = CDI_PIN_MOD_I2C_SDA,
-        .scl_io_num = CDI_PIN_MOD_I2C_SCL,
-        .sda_pullup_en = GPIO_PULLUP_DISABLE,
-        .scl_pullup_en = GPIO_PULLUP_DISABLE,
-        .master.clk_speed = 100000u,
-        .clk_flags = 0,
-    };
-    esp_err_t err = i2c_param_config(MOD_I2C_PORT, &cfg);
-    if (err == ESP_OK)
-        err = i2c_driver_install(MOD_I2C_PORT, cfg.mode, 0, 0, 0);
-    if (err == ESP_ERR_INVALID_STATE) err = ESP_OK;
+    esp_err_t err = init_bus();
     if (err == ESP_OK) err = write_latch(io);
     io->healthy = err == ESP_OK;
 
     esp_err_t request_err = err == ESP_OK ?
-        write_byte(CDI_REQ_I2C_ADDRESS, 0xffu) : err;
+        write_byte(s_u7, 0xffu) : err;
     io->request_healthy = request_err == ESP_OK;
     return err != ESP_OK ? err : request_err;
 }
@@ -73,8 +108,8 @@ esp_err_t cdi_module_io_init(cdi_module_io_t *io)
 static bool poll_u6(cdi_module_io_t *io)
 {
     uint8_t raw = 0xffu;
-    esp_err_t err = i2c_master_read_from_device(MOD_I2C_PORT,
-        CDI_MOD_I2C_ADDRESS, &raw, 1u, IO_TIMEOUT);
+    esp_err_t err = s_u6 == NULL ? ESP_ERR_INVALID_STATE :
+        i2c_master_receive(s_u6, &raw, 1u, IO_TIMEOUT_MS);
     if (err != ESP_OK) {
         if (io->consecutive_errors < 255u) ++io->consecutive_errors;
         if (io->consecutive_errors >= 3u) {
@@ -100,8 +135,8 @@ static bool poll_u6(cdi_module_io_t *io)
 static bool poll_u7(cdi_module_io_t *io)
 {
     uint8_t raw = 0xffu;
-    esp_err_t err = i2c_master_read_from_device(MOD_I2C_PORT,
-        CDI_REQ_I2C_ADDRESS, &raw, 1u, IO_TIMEOUT);
+    esp_err_t err = s_u7 == NULL ? ESP_ERR_INVALID_STATE :
+        i2c_master_receive(s_u7, &raw, 1u, IO_TIMEOUT_MS);
     if (err != ESP_OK) {
         if (io->request_consecutive_errors < 255u)
             ++io->request_consecutive_errors;
