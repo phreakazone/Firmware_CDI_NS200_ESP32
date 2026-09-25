@@ -418,14 +418,11 @@ static void IRAM_ATTR pickup_isr(void *arg)
     }
 
     int16_t timing_trim = 0;
-    bool timing_cut = false;
     cdi_timing_evaluate(&s_timing, protocol.rpm, protocol.tps_permille,
-                        &s_timing_phase, &timing_trim, &timing_cut);
+                        &s_timing_phase, &timing_trim);
     engine.advance_trim_cdeg = (int16_t)(protocol.live_trim_cdeg + timing_trim);
     cdi_r5_status_t decision_status = cdi_r5_make_decision(&engine, &protocol.working,
         period, protocol.tps_permille, &s_soft_phase, &d);
-    if (decision_status == CDI_R5_OK && timing_cut &&
-        d.action == CDI_R5_SPARK_FIRE) d.action = CDI_R5_SPARK_SOFT_CUT;
     if (decision_status == CDI_R5_OK) {
         protocol.rpm = d.rpm;
         s_last_advance_cdeg = d.advance_cdeg;
@@ -632,15 +629,19 @@ void cdi_engine_tick_1ms(void)
     protocol.pro_enabled = engine.pro_enabled;
 
     if ((esp_timer_get_time() - s_last_pickup_us) > 500000) protocol.rpm = 0u;
+    const bool side_present = protocol.module_io_ok &&
+        (protocol.module_present_mask & CDI_R9_MODULE_SIDE) != 0u;
+    const uint16_t hvs_adc = side_present ? cdi_board_adc_raw(CDI_ADC_IDX_HVS) : 0u;
     protocol.hv_center = cdi_r5_hv_adc_to_volts(cdi_board_adc_raw(CDI_ADC_IDX_HVC));
-    protocol.hv_side = cdi_r5_hv_adc_to_volts(cdi_board_adc_raw(CDI_ADC_IDX_HVS));
+    protocol.hv_side = side_present ? cdi_r5_hv_adc_to_volts(hvs_adc) : 0u;
     
     #if BENCH_TEST_MODE
     protocol.hv_center = 0; /* BYPASS TEGANGAN HANTU HV */
     protocol.hv_side = 0;
     #endif
     
-    protocol.hv_enabled = charger.duty_permille != 0u || protocol.hv_center >= 30u || protocol.hv_side >= 30u;
+    protocol.hv_enabled = charger.duty_permille != 0u || protocol.hv_center >= 30u ||
+        (side_present && protocol.hv_side >= 30u);
 
     if (!engine.output_permission || fault_low || protocol.strobe_active) force_safe_full();
 
@@ -702,7 +703,7 @@ void cdi_engine_tick_1ms(void)
     divider = 0u;
     cdi_r5_charger_update(&charger,
         engine.hv_target_override ? engine.hv_target_override : protocol.working.hv_target_volts,
-        cdi_board_adc_raw(CDI_ADC_IDX_HVC), cdi_board_adc_raw(CDI_ADC_IDX_HVS),
+        cdi_board_adc_raw(CDI_ADC_IDX_HVC), hvs_adc,
         engine.side_enabled,
         engine.output_permission, engine.output_permission && !protocol.strobe_active, fault_low);
     cdi_board_charger_set_duty_permille(charger.duty_permille);

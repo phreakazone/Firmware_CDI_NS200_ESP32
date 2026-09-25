@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define CDI_TIMING_MAGIC 0x314D4954u /* TIM1 */
-#define CDI_TIMING_VERSION 2u
+#define CDI_TIMING_VERSION 3u
 
 typedef enum {
     CDI_TIMING_STANDARD = 0,
@@ -31,6 +31,6 @@ void cdi_timing_config_defaults(cdi_timing_config_t *config);
 bool cdi_timing_config_valid(const cdi_timing_config_t *config);
 void cdi_timing_evaluate(const cdi_timing_config_t *config, uint32_t rpm,
                          uint16_t tps_permille, uint8_t *phase,
-                         int16_t *trim_cdeg, bool *soft_cut);
+                         int16_t *trim_cdeg);
 
 #endif

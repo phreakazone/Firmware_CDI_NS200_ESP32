@@ -319,7 +319,18 @@ GET,TIMING
 | FOMO | 5 |
 | CUSTOM | 6 |
 
-Intensity 0–10, jendela 500–5000 RPM, hanya TPS rendah, dan hasil tetap dijepit PROFILE/map. KUDA/DRUMBAND/FOMO adalah efek idle/show, bukan map daya.
+Default firmware v3: STANDARD 0/10 1150–1700; SOFT 2/10 1250–1550; RESPONSIVE 3/10 1200–1700; KUDA 4/10 1200–1600; DRUMBAND 5/10 1200–1650; FOMO 6/10 1150–1700; CUSTOM 4/10 1200–1650 RPM.
+
+SOFT/RESPONSIVE dibatasi ±2°. Profil ritmis mengayunkan timing bipolar per event dan dijepit ±8° dari map aktif; tidak ada fuel-cut atau spark-cut. Efek hanya aktif pada TPS ≤5%, retard dibatalkan 100 RPM dekat batas bawah, advance dibatalkan 100 RPM dekat batas atas, lalu kembali ke map utama di luar jendela. Idle standar NS200 tetap 1350–1450 RPM. KUDA/DRUMBAND/FOMO adalah nama profil IgniTra, bukan angka baku industri, sehingga baseline ini tetap memerlukan validasi prototipe.
+
+HV SIDE hanya dibaca ketika bit SIDE_DET dari U6 valid. Tanpa modul SIDE, firmware mengirim 0 V dan mengecualikan kanal tersebut dari keputusan `hv_enabled`; aplikasi menampilkannya sebagai N/A. Core tetap memakai pull-down 1 MΩ agar ADC tidak mengambang. Dengan resistor bawah modul 8,2 kΩ, beban paralel menjadi sekitar 8,13 kΩ (galat skala sekitar 0,8%), bukan 7,58 kΩ/sekitar 7,5% seperti pull-down 100 kΩ.
+
+Referensi penetapan baseline:
+
+- [MaxxECU — Lumpy idle](https://www.maxxecu.com/webhelp/solutions_and_faq-lumpy_idle.html): efek dibuat dengan perubahan ignition timing cepat per event, bukan ignition/fuel cut.
+- [Pulsar 200NS Service Manual](https://roadsafetymoris.org.in/ns200/bajaj_pulsar_200_nsServiceManual.pdf): idle standar 1350–1450 RPM.
+
+Referensi tersebut menetapkan metode dan envelope kerja, bukan angka universal untuk nama KUDA/DRUMBAND/FOMO. Nilai profil IgniTra di atas adalah baseline konservatif; hasil suara dan batas termalnya harus dikunci dari log RPM, timing, suhu mesin, dan pemeriksaan busi pada prototipe.
 
 ## AUX, kontak dan starter
 
