@@ -1,0 +1,20 @@
+# ESP-IDF generated output
+build/
+managed_components/
+dependencies.lock
+
+# Local configuration history and logs
+sdkconfig.old
+*.log
+
+# Firmware binaries and debug artifacts
+*.bin
+*.elf
+*.map
+*.hex
+
+# Editor/OS noise
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
