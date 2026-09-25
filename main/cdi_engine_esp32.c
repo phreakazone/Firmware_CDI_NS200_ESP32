@@ -79,6 +79,7 @@ static void force_safe_full(void);
 
 #define NVS_NAMESPACE "cdi_r5"
 #define NVS_KEY_STORE "store"
+#define NVS_KEY_SETUP "setup"
 #define NVS_KEY_FSPROOF "fsproof"
 #define NVS_KEY_TIMING "timing"
 #define NVS_KEY_AUX_INPUT "auxinput"
@@ -98,6 +99,28 @@ static bool nvs_save_store(const cdi_r5_store_image_t *image)
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
     esp_err_t err = nvs_set_blob(h, NVS_KEY_STORE, image, sizeof(*image));
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK;
+}
+
+static bool nvs_load_setup(cdi_r7_setup_t *setup)
+{
+    nvs_handle_t h;
+    size_t len = sizeof(*setup);
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_get_blob(h, NVS_KEY_SETUP, setup, &len);
+    nvs_close(h);
+    return err == ESP_OK && len == sizeof(*setup) &&
+           cdi_r7_setup_validate(setup) == CDI_R5_OK;
+}
+
+static bool nvs_save_setup(const cdi_r7_setup_t *setup)
+{
+    nvs_handle_t h;
+    if (setup == NULL || cdi_r7_setup_validate(setup) != CDI_R5_OK ||
+        nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_set_blob(h, NVS_KEY_SETUP, setup, sizeof(*setup));
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
     return err == ESP_OK;
@@ -134,10 +157,38 @@ static bool nvs_fsproof_clear(void)
     return err == ESP_OK;
 }
 
+static cdi_r5_store_image_t s_persisted_store;
+static bool s_persisted_store_valid;
+
 static bool persist_maps(const cdi_r5_store_image_t *image, void *context)
 {
     (void)context;
-    return nvs_save_store(image);
+    if (image == NULL || cdi_r5_store_validate(image) != CDI_R5_OK) return false;
+
+    /*
+     * Sebagian besar command Setup hanya mengubah cdi_r7_setup_t. Menulis
+     * seluruh blob map + OEM profile pada setiap klik memperpanjang flash
+     * stall dan dapat menjatuhkan koneksi BLE. Simpan journal setup kecil
+     * bila bagian lain tidak berubah; boot akan meng-overlay journal ini.
+     */
+    bool setup_only = s_persisted_store_valid &&
+        memcmp(image, &s_persisted_store,
+               offsetof(cdi_r5_store_image_t, setup)) == 0 &&
+        memcmp(&image->oem_profile, &s_persisted_store.oem_profile,
+               sizeof(image->oem_profile)) == 0;
+
+    bool ok;
+    if (setup_only) {
+        ok = nvs_save_setup(&image->setup);
+    } else {
+        ok = nvs_save_store(image);
+        if (ok) (void)nvs_save_setup(&image->setup);
+    }
+    if (ok) {
+        s_persisted_store = *image;
+        s_persisted_store_valid = true;
+    }
+    return ok;
 }
 
 static bool nvs_load_timing(cdi_timing_config_t *config)
@@ -479,6 +530,16 @@ void cdi_engine_init(void)
         cdi_r5_load_defaults(&store);
         (void)nvs_save_store(&store);
     }
+    cdi_r7_setup_t journal_setup;
+    if (nvs_load_setup(&journal_setup)) {
+        store.setup = journal_setup;
+        cdi_r5_store_seal(&store);
+    } else {
+        (void)nvs_save_setup(&store.setup);
+    }
+    s_persisted_store = store;
+    s_persisted_store_valid = true;
+
     if (store.setup.stage == CDI_R7_STAGE_FIRST_START && nvs_fsproof_load()) {
         store.setup.first_start_proven = 1u;
         store.setup.stage = CDI_R7_STAGE_READY;
@@ -488,6 +549,9 @@ void cdi_engine_init(void)
             store.oem_profile.valid && store.oem_profile.side_samples >= 10u;
         cdi_r5_store_seal(&store);
         (void)nvs_save_store(&store);
+        (void)nvs_save_setup(&store.setup);
+        s_persisted_store = store;
+        s_persisted_store_valid = true;
         (void)nvs_fsproof_clear();
     } else if (store.setup.stage != CDI_R7_STAGE_FIRST_START) {
         (void)nvs_fsproof_clear();
