@@ -200,7 +200,8 @@ cdi_r5_status_t cdi_r5_map_validate(const cdi_r5_map_t *map, bool pro_unlocked)
         map->tps_count < 2u || map->tps_count > CDI_R5_TPS_POINTS ||
         map->rpm_limit < 500u || map->rpm_limit > CDI_R5_ABSOLUTE_RPM_CAP ||
         map->soft_band_rpm > 3000u ||
-        map->hv_target_volts < 180u || map->hv_target_volts > 400u ||
+        map->hv_target_volts < 180u ||
+        map->hv_target_volts > CDI_R9_HV_TARGET_MAX_VOLTS ||
         !axis_valid(map->rpm_axis, map->rpm_count, CDI_R5_ABSOLUTE_RPM_CAP) ||
         !axis_valid(map->tps_axis, map->tps_count, 1000u))
         return CDI_R5_ERR_MAP;
@@ -347,9 +348,10 @@ cdi_r5_status_t cdi_r5_live_set_cell(cdi_r5_map_t *map, uint8_t tps_index,
     cdi_r5_status_t valid;
     if (map == NULL || tps_index >= map->tps_count || rpm_index >= map->rpm_count)
         return CDI_R5_ERR_ARGUMENT;
+    /* No artificial per-command step lock. The complete signed map range is
+     * available while running; the application presents the user agreement. */
+    (void)engine_running;
     old = map->advance_cdeg[tps_index][rpm_index];
-    if (engine_running && (advance_cdeg > old + 200 || advance_cdeg < old - 200))
-        return CDI_R5_ERR_LIVE_STEP;
     map->advance_cdeg[tps_index][rpm_index] = advance_cdeg;
     valid = cdi_r5_map_validate(map, pro_unlocked);
     if (valid != CDI_R5_OK) {
@@ -430,3 +432,4 @@ bool cdi_r9_fan_update(const cdi_r7_setup_t *s, int16_t temperature_cdeg,
         return temperature_cdeg > (int16_t)s->fan_off_cdeg;
     return temperature_cdeg >= (int16_t)s->fan_on_cdeg;
 }
+
