@@ -11,7 +11,7 @@
 #include <stdint.h>
 
 #define CDI_FW_RELEASE "R9"
-#define CDI_FW_SEMVER "9.6.1"
+#define CDI_FW_SEMVER "9.6.2"
 #define CDI_FW_BUILD_ID "20260925"
 #define CDI_DEVICE_SERIAL_LEN 32u
 
