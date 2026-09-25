@@ -67,7 +67,11 @@ static cdi_timing_config_t s_timing;
 static uint8_t s_timing_phase;
 static cdi_aux_input_config_t s_aux_input_config;
 static volatile bool s_aux_keyless_on, s_aux_starter_on;
-static volatile bool s_ignition_run_allowed = true;
+/* Default OFF until U7/P3 has been sampled. This prevents a boot-time spark
+ * window when neither the mechanical contact nor keyless control is active. */
+static volatile bool s_ignition_run_allowed;
+static volatile bool s_mechanical_contact_on;
+static volatile uint8_t s_contact_source = CDI_R9_CONTACT_OFF;
 static volatile int64_t s_aux_starter_deadline_us;
 static uint8_t s_last_request_mask;
 
@@ -192,15 +196,21 @@ static bool aux_control(uint8_t channel, bool enable, uint16_t duration_ms,
         s_ignition_run_allowed = false;
         force_safe_full();
         s_aux_keyless_on = false;
+        s_contact_source = s_mechanical_contact_on ?
+            CDI_R9_CONTACT_MECHANICAL : CDI_R9_CONTACT_OFF;
     } else if (channel == CDI_R9_AUX_KEYLESS) {
         if (enable) {
             s_ignition_run_allowed = true;
             s_aux_keyless_on = true;
+            s_contact_source = s_mechanical_contact_on ?
+                CDI_R9_CONTACT_MECHANICAL : CDI_R9_CONTACT_KEYLESS;
         } else {
             s_aux_starter_on = false;
-            s_ignition_run_allowed = false;
-            force_safe_full();
             s_aux_keyless_on = false;
+            s_ignition_run_allowed = s_mechanical_contact_on;
+            s_contact_source = s_mechanical_contact_on ?
+                CDI_R9_CONTACT_MECHANICAL : CDI_R9_CONTACT_OFF;
+            if (!s_ignition_run_allowed) force_safe_full();
         }
     } else if (channel == CDI_R9_AUX_STARTER) {
         if (!enable) {
@@ -498,7 +508,14 @@ void cdi_engine_init(void)
     protocol.module_io_ok = cdi_module_io_healthy(&s_module_io);
     protocol.aux_request_mask = cdi_module_io_request_mask(&s_module_io);
     protocol.aux_request_io_ok = cdi_module_io_requests_healthy(&s_module_io);
-    s_last_request_mask = protocol.aux_request_mask;
+    s_mechanical_contact_on = protocol.aux_request_io_ok &&
+        (protocol.aux_request_mask & CDI_REQ_IGNITION) != 0u;
+    s_ignition_run_allowed = s_mechanical_contact_on;
+    s_contact_source = s_mechanical_contact_on ?
+        CDI_R9_CONTACT_MECHANICAL : CDI_R9_CONTACT_OFF;
+    /* Start from zero so a held J1.1 request present during wake-up is
+     * processed on the first 20 ms service pass. */
+    s_last_request_mask = 0u;
     cdi_r8_oem_learn_init(&oem_learner, engine.timer_hz);
     
     cdi_r8_protocol_attach_oem_learner(&protocol, &oem_learner);
@@ -545,20 +562,37 @@ void cdi_engine_tick_1ms(void)
         protocol.aux_request_mask = cdi_module_io_request_mask(&s_module_io);
         protocol.aux_request_io_ok = cdi_module_io_requests_healthy(&s_module_io);
 
+        bool mechanical_now = protocol.aux_request_io_ok &&
+            (protocol.aux_request_mask & CDI_REQ_IGNITION) != 0u;
+        bool mechanical_rising = mechanical_now && !s_mechanical_contact_on;
+        bool mechanical_falling = !mechanical_now && s_mechanical_contact_on;
+        s_mechanical_contact_on = mechanical_now;
+
         bool aux_ready = protocol.module_io_ok &&
             protocol.aux_request_io_ok && s_aux_input_config.enabled &&
             (protocol.module_present_mask & CDI_R9_MODULE_AUX) != 0u;
         if (!aux_ready) {
             s_aux_starter_on = false;
             if (s_aux_keyless_on) {
-                s_ignition_run_allowed = false;
-                force_safe_full();
                 s_aux_keyless_on = false;
+                if (s_contact_source == CDI_R9_CONTACT_KEYLESS) {
+                    s_ignition_run_allowed = false;
+                    s_contact_source = CDI_R9_CONTACT_OFF;
+                    force_safe_full();
+                }
             }
         } else {
             uint8_t rising = protocol.aux_request_mask &
                              (uint8_t)~s_last_request_mask;
-            if ((rising & CDI_REQ_KEYLESS) != 0u)
+            if (mechanical_rising) {
+                s_ignition_run_allowed = true;
+                s_contact_source = CDI_R9_CONTACT_MECHANICAL;
+                s_aux_keyless_on = true; /* K1 hold before physical OFF. */
+            }
+            if (mechanical_falling &&
+                s_contact_source == CDI_R9_CONTACT_MECHANICAL)
+                (void)aux_control(CDI_R9_AUX_ALL, false, 0u, NULL);
+            if ((rising & CDI_REQ_KEYLESS) != 0u && !mechanical_now)
                 (void)aux_control(CDI_R9_AUX_KEYLESS,
                                   !s_aux_keyless_on, 0u, NULL);
             if ((rising & CDI_REQ_START) != 0u)
@@ -638,6 +672,10 @@ void cdi_engine_tick_1ms(void)
                                 s_aux_starter_on, false);
     protocol.aux_keyless_on = s_aux_keyless_on;
     protocol.aux_starter_on = s_aux_starter_on;
+    protocol.aux_mechanical_on = s_mechanical_contact_on;
+    protocol.aux_ignition_allowed = s_ignition_run_allowed;
+    protocol.aux_engine_running = protocol.rpm >= 500u;
+    protocol.aux_contact_source = s_contact_source;
 
     if (store.setup.stage != CDI_R7_STAGE_FIRST_START) {
         s_first_start_good_ms = 0; protocol.first_start_seconds = 0u;
