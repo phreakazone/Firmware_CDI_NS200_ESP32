@@ -52,14 +52,14 @@ main/cdi_firmware.* bukan implementasi aktif dan tidak boleh dijadikan referensi
 
 ---
 
-## 2. Identitas firmware R9.2
+## 2. Identitas firmware R9.4
 
 | Item | Nilai |
 |---|---|
 | Platform | ESP32 klasik/WROOM-32 |
 | Release | R9 |
-| Semantic version | 9.2.0 |
-| Build ID | 20260923 |
+| Semantic version | 9.4.0 |
+| Build ID | 20260924 |
 | Protokol perintah | 5 |
 | Paket telemetry | v3, 20 byte |
 | Nama advertising | NS200-CDI |
@@ -1325,6 +1325,39 @@ AUX commands:
     AUX,START,PULSE,100..3000
     AUX,ALL,OFF
 
-START is rejected unless AUX is physically detected, keyless is active, battery/fault state is valid and RPM <300. It is cancelled by timeout, RPM >=500, battery/fault failure, I2C failure or module removal. Hardware must keep the OEM neutral/clutch/side-stand interlock and OEM starter relay in series; firmware cannot replace an input that is not present on the header.
+START is rejected unless AUX is physically detected/enabled, contact permission is ON, battery/fault state is valid and RPM <300. In UNIVERSAL_MANUAL, J1.9/NEUTRAL_IN must also be active. It is cancelled by timeout, RPM >=500, battery/fault failure, I2C failure or module removal. Hardware must keep the OEM neutral/clutch/side-stand interlock and OEM starter relay in series.
 
 New capability tokens: MODULE_DET_PCF8574, TIMING_PRESETS, TIMING_KUDA, AUX_RELAY.
+
+
+## 24. Additive protocol R9.4 — universal requests and contact state
+
+Hardware inputs use U7 PCF8574P at 0x21 and are ignored until AUX is physically detected and enabled:
+
+| J1 | U7 | NS200 | UNIVERSAL_MANUAL | UNIVERSAL_MATIC |
+|---:|---:|---|---|---|
+| 1 | P0 | KEYLESS_REQ pulse | KEYLESS_REQ pulse | KEYLESS_REQ pulse |
+| 8 | P1 | START_REQ | START_REQ | START_REQ |
+| 9 | P2 | MODE_REQ | NEUTRAL_IN wajib | MODE_REQ/disabled |
+
+Configure once while setup writes are allowed:
+
+    AUX,CONFIG,NS200,ON
+    AUX,CONFIG,MANUAL,ON
+    AUX,CONFIG,MATIC,ON
+
+Readback:
+
+    GET,AUX
+    AUX,2,keylessOn,starterOn,auxPresent,inputEnabled,profile,requestMask,requestIoOk
+
+App control behavior:
+
+1. CONTACT ON sends `AUX,KEYLESS,ON`; firmware enables ignition permission before K1.
+2. START sends `AUX,START,PULSE,1500` (valid range 100..3000 ms).
+3. K2 releases at timeout, RPM >=500, fault, low/high battery, I2C failure, or AUX removal.
+4. CONTACT OFF sends `AUX,ALL,OFF` or `AUX,KEYLESS,OFF`.
+5. Firmware performs K2 OFF, ignition permission OFF, gate/charger HV safe, then K1 OFF.
+6. App must query `GET,AUX` and `GET,STATUS` after every AUX ACK and never infer final state from the ACK alone.
+
+J1.1 is a momentary protected +12 V wake/request input. A rising pulse toggles the physical keyless session. Releasing the momentary signal does not turn the engine off. While K1 bypasses the mechanical switch, `IGN_12V` cannot independently reveal the switch position; CONTACT OFF from the app/remote owns shutdown of a keyless session.
