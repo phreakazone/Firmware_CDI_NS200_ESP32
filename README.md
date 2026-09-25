@@ -58,80 +58,39 @@ Semua input analog memakai ADC1 karena ADC2 tidak dapat diandalkan ketika BLE ak
 
 ## Jalur daya dan harness utama J1
 
-```text
-J1.5 IGN_12V → DREV → VIN_PROT → L_IN → VIN_FILT
-VIN_FILT → UBUCK MP1584 → 5V_LOGIC
-5V_LOGIC → JP1 → ESP_5V
-```
+J1 memakai penomoran kolom kiri 1–6 dan kanan 7–12. Pada harness NS200 asli pin 1/8/9 tetap kosong sampai kabel tambahan dipasang.
 
 | Pin J1 | Net/fungsi |
 |---:|---|
-| 1 | Tidak dipakai |
+| 1 | `KEYLESS_REQ`: pulsa +12 V terproteksi, minimum 1,5 s |
 | 2 | `TPS_A` |
 | 3 | `TEMP_SENSOR` |
 | 4 | `TPS_B` |
 | 5 | `IGN_12V` |
 | 6 | `COIL_SIDE` |
 | 7 | `FAN_RELAY` |
-| 8 | Tidak dipakai |
-| 9 | Tidak dipakai |
+| 8 | `START_REQ`: dry-contact/open-collector ke GND_LOGIC |
+| 9 | `MODE_REQ`; menjadi `NEUTRAL_IN` pada UNIVERSAL_MANUAL |
 | 10 | `PICKUP_RAW` |
 | 11 | `GND_STAR` |
 | 12 | `COIL_CENTER` |
 
+DKEY_WAKE pada J1.1 hanya membangunkan buck/ESP32. Charger HV tetap tidak mendapat jalur IGN normal sampai relay K1 aktif. GND_LOGIC dan GND_POWER hanya bertemu pada star point Core.
+
 ## Header modul
 
-Nomor dan NetLabel pada header PCB utama harus sama dengan header pasangannya di modul.
+Semua konektor memakai pitch 2,54 mm. Core memakai male THT dan modul memakai female long-tail stackable. Header 2×6 memakai kolom kiri 1–6/kanan 7–12; header 2×3 memakai baris 1–2, 3–4, 5–6.
 
-### SIDE — 2×6
+| Header | Pemetaan pin berurutan |
+|---|---|
+| JMOD_SIDE | 1 BRIDGE_PLUS; 2 SIDE_DET; 3 COIL_SIDE; 4 MOD_I2C_SDA; 5 GND_POWER; 6 MOD_I2C_SCL; 7 VIN_FILT; 8 GATE_S; 9 HV_S_FB; 10 GND_POWER; 11 3V3; 12 GND_LOGIC |
+| JMOD_THERMAL | 1 VIN_PROT; 2 GND_POWER; 3 5V_LOGIC; 4 GND_LOGIC; 5 3V3; 6 TEMP_SENSOR; 7 TEMP_ADC; 8 FAN_CTL; 9 FAN_RELAY; 10 THERMAL_DET; 11 MOD_I2C_SDA; 12 MOD_I2C_SCL |
+| JMOD_LEARN | 1 3V3; 2 GND_LOGIC; 3 OEM_CENTER; 4 OEM_SIDE; 5 GND_POWER; 6 LEARN_DET |
+| JMOD_AUX | 1 VIN_PROT; 2 GND_POWER; 3 5V_LOGIC; 4 GND_LOGIC; 5 3V3; 6 AUX_DET; 7 STROBE; 8 AUDIO_PWM; 9 MOD_I2C_SDA; 10 MOD_I2C_SCL; 11 EXP_IO1; 12 EXP_IO2 |
+| JMOD_TPS | 1 TPS_REF_RAW; 2 3V3; 3 GND_LOGIC; 4 TPS_REF_ADC; 5 TPS_DET; 6 TPS_SIG_RAW |
+| JMOD_EXP | 1 3V3; 2 GND_LOGIC; 3 5V_LOGIC; 4 GND_POWER; 5 VIN_PROT; 6 EXP_IO1; 7 MOD_I2C_SDA; 8 MOD_I2C_SCL; 9 EXP_IO2; 10 EXP_IO3; 11 FAULT_N; 12 STROBE |
 
-| Pin | Net | Pin | Net |
-|---:|---|---:|---|
-| 1 | `BRIDGE_PLUS` | 7 | `VIN_FILT` |
-| 2 | NC | 8 | `GATE_S` |
-| 3 | `COIL_SIDE` | 9 | `HV_S_FB` |
-| 4 | NC | 10 | `GND_POWER` |
-| 5 | `GND_POWER` | 11 | NC |
-| 6 | NC | 12 | NC |
-
-Header 2×6 memakai penomoran footprint J1: kolom kiri 1–6 dan kolom kanan 7–12.
-
-### THERMAL/FAN — 2×6
-
-| Pin | Net | Pin | Net |
-|---:|---|---:|---|
-| 1 | `VIN_PROT` | 7 | `TEMP_ADC` |
-| 2 | `GND_POWER` | 8 | `FAN_CTL` |
-| 3 | `5V_LOGIC` | 9 | `FAN_RELAY` |
-| 4 | `GND_LOGIC` | 10 | NC |
-| 5 | `3V3` | 11 | NC |
-| 6 | `TEMP_SENSOR` | 12 | NC |
-
-### OEM LEARN — 2×3
-
-| Pin | Net | Pin | Net |
-|---:|---|---:|---|
-| 1 | `3V3` | 2 | `GND_LOGIC` |
-| 3 | `OEM_CENTER` | 4 | `OEM_SIDE` |
-| 5 | `GND_POWER` | 6 | NC |
-
-### AUX — 2×3
-
-| Pin | Net | Pin | Net |
-|---:|---|---:|---|
-| 1 | `VIN_PROT` | 2 | `5V_LOGIC` |
-| 3 | `3V3` | 4 | `GND_POWER` |
-| 5 | `STROBE` | 6 | `AUDIO_PWM` |
-
-### TPS DIAGNOSTIC — 2×3
-
-| Pin | Net | Pin | Net |
-|---:|---|---:|---|
-| 1 | `TPS_REF_RAW` | 2 | `3V3` |
-| 3 | `GND_LOGIC` | 4 | `TPS_REF_ADC` |
-| 5 | NC | 6 | NC |
-
-Header 2×3 dinomori per baris: `1–2`, `3–4`, `5–6`.
+Setiap modul SIDE/THERMAL/LEARN/AUX/TPS menarik DET masing-masing ke GND_LOGIC melalui 1 kΩ. SIDE/HV tetap memerlukan slot dan keepout; pitch pad 2,54 mm bukan pengganti creepage.
 
 ## Perilaku paket dasar dan modul
 
@@ -240,3 +199,12 @@ Jangan menggunakan nama pin STM32 (`PA0`, `PB3`, dan sejenisnya) sebagai sumber 
 - Firmware source was updated only; no build artifact was generated.
 
 See [hardware block/BOM guide](docs/HARDWARE_REV_C_BLOCKS_BOM.md) and [app/firmware reference](docs/APP_FIRMWARE_REFERENCE.md).
+
+## Rev C Freeze 2 — contact/keyless/starter
+
+- U6 PCF8574P alamat 0x20 menangani DET dan output AUX; U7 alamat 0x21 membaca KEYLESS_REQ, START_REQ, serta MODE_REQ/NEUTRAL_IN.
+- `AUX,KEYLESS,ON` memberi izin pengapian dan mengaktifkan K1. `AUX,START,PULSE,100..3000` mengaktifkan K2 sementara; K2 lepas saat RPM ≥500 atau terjadi fault.
+- `AUX,KEYLESS,OFF` dan `AUX,ALL,OFF` menjalankan CONTACT OFF: K2 OFF, spark/HV OFF, lalu K1 OFF.
+- K2 juga dibatasi U8 NE555 one-shot: 2.42 s nominal dan sekitar 2.93 s worst-case, sehingga PCF/I²C yang macet LOW tidak dapat menahan starter terus-menerus.
+- UNIVERSAL_MANUAL menolak starter tanpa NEUTRAL_IN. UNIVERSAL_MATIC tidak mewajibkan netral. Interlock OEM tetap harus dipertahankan.
+- Source firmware saja yang diperbarui; belum dibuild dan belum dijadikan artefak produksi.

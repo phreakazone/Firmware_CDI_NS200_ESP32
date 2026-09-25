@@ -4,21 +4,21 @@ Dokumen ini adalah acuan penempatan manual. Kotak pada skematik hanya panduan vi
 
 ## J1 yang benar
 
-J1 memakai penomoran kolom: kiri 1–6, kanan 7–12. J1.1 tetap **GND_LOGIC** karena merupakan referensi sensor/harness dan sudah menjadi kontrak Rev B. Jangan memindahkannya hanya karena posisi simbol terlihat tidak rapi.
+J1 memakai penomoran kolom: kiri 1–6, kanan 7–12. Pada harness NS200 asli J1.1/J1.8/J1.9 tetap kosong; fungsi berikut hanya dipakai setelah terminal kabel tambahan dipasang dan Setup AUX diaktifkan.
 
 | Pin | Net | Kelompok |
 |---:|---|---|
-| 1 | GND_LOGIC | referensi sensor/logika |
+| 1 | KEYLESS_REQ | pulsa +12 V terproteksi; wake logic dan toggle contact keyless |
 | 2 | TPS_A | sensor TPS |
 | 3 | TEMP_SENSOR | sensor suhu |
 | 4 | TPS_B | sensor TPS |
-| 5 | IGN_12V | masukan kendaraan |
+| 5 | IGN_12V | keluaran kunci kontak normal / masukan daya kendaraan |
 | 6 | COIL_SIDE | keluaran coil side |
 | 7 | FAN_RELAY | coil relay kipas OEM |
-| 8 | cadangan harness | jangan dihubungkan sebelum fungsi ditetapkan |
-| 9 | cadangan harness | jangan dihubungkan sebelum fungsi ditetapkan |
+| 8 | START_REQ | dry-contact/open-collector ke GND_LOGIC |
+| 9 | MODE_REQ / NEUTRAL_IN | NS200/matic: mode; universal manual: netral aktif-rendah |
 | 10 | PICKUP_RAW | pickup mesin |
-| 11 | GND_STAR | return daya kendaraan |
+| 11 | GND_STAR | satu-satunya return daya kendaraan |
 | 12 | COIL_CENTER | keluaran coil center |
 
 ## Aturan prefix
@@ -42,9 +42,9 @@ Tempatkan J1→DREV/TVS→L_IN→C_IN→UBUCK dalam satu aliran. NT1/NT2 berada 
 
 ### C2 — ESP32, 3V3/5V, I2C, dan deteksi modul
 
-U1 ESP32 DevKit 38 pin; U6 PCF8574P DIP-16; CU6 100 nF; RI2C_SDA/RI2C_SCL 4.7 kΩ; RDET_SIDE/RDET_TH/RDET_LEARN/RDET_AUX/RDET_TPS 10 kΩ; JMOD_SIDE, JMOD_THERMAL, JMOD_AUX, JMOD_EXP header 2×6 2.54 mm; JMOD_LEARN/JMOD_TPS header 2×3 2.54 mm.
+U1 ESP32 DevKit 38 pin; U6 PCF8574P DIP-16 alamat 0x20; U7 PCF8574P DIP-16 alamat 0x21; CU6/CU7 100 nF; RI2C_SDA/RI2C_SCL 4.7 kΩ; RDET_SIDE/RDET_TH/RDET_LEARN/RDET_AUX/RDET_TPS 10 kΩ; JMOD_SIDE, JMOD_THERMAL, JMOD_AUX, JMOD_EXP header 2×6 2.54 mm; JMOD_LEARN/JMOD_TPS header 2×3 2.54 mm.
 
-U6: P0 SIDE, P1 THERMAL, P2 LEARN, P3 AUX, P4 TPS, P5 EXP_IO1, P6 EXP_IO2, P7 EXP_IO3. SDA=GPIO21, SCL=GPIO22, alamat 0x20.
+U6: P0 SIDE, P1 THERMAL, P2 LEARN, P3 AUX, P4 TPS, P5 EXP_IO1, P6 EXP_IO2, P7 EXP_IO3. U7: P0 KEYLESS_REQ_N, P1 START_REQ_F, P2 MODE_REQ_F/NEUTRAL_IN. SDA=GPIO21, SCL=GPIO22.
 
 ### C3 — Pickup, TPS, suhu, VBAT, comparator
 
@@ -93,11 +93,11 @@ Beri jarak antara resistor input OEM dan sisi output optocoupler.
 
 - A1 strobe: QSTROBE IRLZ44N, RSTR1 **100 Ω ½ W**, RSTR2 10 kΩ, JSTROBE 1×2.
 - A2 keyless: K1 G8NB-1U 12 V, QREL1 BC337, DREL1 UF4007, RREL1 680 Ω, RRELPD1 10 kΩ, JKEYLESS terminal 5.08 mm.
-- A3 starter: K2 G8NB-1U 12 V, QREL2 BC337, DREL2 UF4007, RREL2 680 Ω, RRELPD2 10 kΩ, JSTART terminal 5.08 mm.
+- A3 starter: U8 NE555P edge-triggered one-shot; CSTART_TRIG 10 nF, RSTART_TRIG 10 kΩ, DSTART_TRIG/DSTART_TRIG_H BAT85 low/high clamp; RSTART_TIME 2.2 MΩ 1%, CSTART_TIME 1 µF X7R ±20%, CSTART_CTRL 10 nF; K2 G8NB-1U 12 V, QREL2 BC337, DREL2 UF4007, RREL2 680 Ω, RRELPD2 10 kΩ, JSTART terminal 5.08 mm.
 - A4 audio: RAUD1/RAUD2 1 kΩ; CAUD1/CAUD2 10 nF; JAUDIO/JAUDIO_OUT.
 - A5 interface: PMOD_AUX 2×6, RMDET_AUX 1 kΩ.
 
-**Revisi wajib sebelum PCB:** tambahkan QPRE1/QPRE2 BC557, resistor basis 4.7 kΩ dan pull-up 10 kΩ di antara EXP_IO1/2 dan QREL1/2. Dengan demikian PCF HIGH/power-up = relay OFF, PCF LOW = relay ON. Jangan menghubungkan EXP_IO langsung ke basis BC337.
+QPRE1/RBPRE1/RPREPU1 memberi K1 safe-default HIGH=OFF. K2 memakai pulsa jatuh EXP_IO2 untuk memicu U8. Dengan t=1.1RC, nominal 2.42 s dan worst-case R +1%/C +20% sekitar 2.93 s; output PCF yang macet LOW tidak dapat menahan K2 terus-menerus. K2 hanya memparalel tombol/coil relay starter OEM, bukan arus dinamo starter.
 
 ## MODULE TPS dan EXP
 
