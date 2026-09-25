@@ -15,6 +15,7 @@
 #define CDI_R9_ADVANCE_MIN_CDEG (-3000)
 #define CDI_R9_ADVANCE_MAX_CDEG 8000
 #define CDI_R9_MAX_PPR 12u
+#define CDI_R9_HV_TARGET_MAX_VOLTS 345u
 #define CDI_R7_SETUP_MAGIC 0x37505553u
 #define CDI_R7_SETUP_VERSION 3u
 
@@ -35,7 +36,8 @@ typedef enum { CDI_R5_LIMITER_SOFT = 0, CDI_R5_LIMITER_HARD = 1 } cdi_r5_limiter
 typedef enum {
     CDI_R5_OK = 0, CDI_R5_ERR_ARGUMENT, CDI_R5_ERR_MAP,
     CDI_R5_ERR_PRO_LOCKED, CDI_R5_ERR_DISARMED, CDI_R5_ERR_PERIOD,
-    CDI_R5_ERR_ADVANCE, CDI_R5_ERR_LIVE_STEP, CDI_R5_ERR_ENGINE_RUNNING,
+    CDI_R5_ERR_ADVANCE, CDI_R5_ERR_LIVE_STEP, /* deprecated wire compatibility */
+    CDI_R5_ERR_ENGINE_RUNNING,
     CDI_R5_ERR_HV_ACTIVE, CDI_R5_ERR_CRC
 } cdi_r5_status_t;
 typedef enum {
@@ -153,3 +155,4 @@ bool cdi_r9_fan_update(const cdi_r7_setup_t *setup, int16_t temperature_cdeg,
 uint8_t cdi_r9_effective_module_mask(const cdi_r5_store_image_t *image);
 
 #endif
+
