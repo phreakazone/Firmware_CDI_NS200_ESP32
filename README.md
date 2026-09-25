@@ -9,7 +9,7 @@ README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kont
 | Item | Nilai dari source |
 |---|---|
 | Release | R9 |
-| Semantic version | 9.6.1 |
+| Semantic version | 9.6.2 |
 | Build ID | 20260925 |
 | Platform | ESP32 klasik/WROOM-32 |
 | Protocol command | 5 |
@@ -345,6 +345,10 @@ Referensi penetapan baseline:
 - [Pulsar 200NS Service Manual](https://roadsafetymoris.org.in/ns200/bajaj_pulsar_200_nsServiceManual.pdf): idle standar 1350–1450 RPM.
 
 Referensi tersebut menetapkan metode dan envelope kerja, bukan angka universal untuk nama KUDA/DRUMBAND/FOMO. Nilai profil IgniTra di atas adalah baseline konservatif; hasil suara dan batas termalnya harus dikunci dari log RPM, timing, suhu mesin, dan pemeriksaan busi pada prototipe.
+
+## NVS setup journal R9.6.2
+
+Perubahan setup kecil—termasuk `SETUP,INSTALL,CORE,OEM_REMOVED`—sekarang menyimpan hanya struktur setup ke key NVS terpisah. Firmware tidak lagi menulis ulang seluruh blob empat map dan profil OEM untuk satu konfirmasi instalasi. Saat boot, journal setup divalidasi lalu di-overlay ke store utama dan CRC disegel ulang. Perubahan map/OEM tetap menulis store penuh. Ini mengurangi waktu flash stall pada jalur setup tanpa mengubah format protokol maupun pin hardware.
 
 ## Koreksi reconnect saat konfirmasi Core
 
