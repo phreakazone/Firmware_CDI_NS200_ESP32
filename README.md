@@ -1,6 +1,6 @@
-# IgniTra CDI ESP32 R9 Modular
+# IgniTra Universal CDI ESP32 R9 Modular
 
-Firmware ESP-IDF untuk IgniTra CDI berbasis ESP32-WROOM-32 DevKit 38-pin. Core menjalankan satu kanal pengapian CENTER; SIDE, THERMAL/FAN, OEM Learn, AUX, dan TPS Diagnostic adalah modul opsional yang dapat dipasang bersamaan.
+Firmware ESP-IDF untuk IgniTra Universal CDI berbasis ESP32-WROOM-32 DevKit 38-pin. NS200 adalah salah satu profil kendaraan, bukan batas arsitektur. Core menjalankan satu kanal CDI CENTER; SIDE, THERMAL/FAN, OEM Learn, AUX, TPS Diagnostic, dan EXP adalah modul opsional.
 
 README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kontrak aplikasi, pin/net, header modul, BOM, setup, build, uji dan keselamatan.
 
@@ -9,18 +9,30 @@ README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kont
 | Item | Nilai dari source |
 |---|---|
 | Release | R9 |
-| Semantic version | 9.5.0 |
+| Semantic version | 9.6.0 |
 | Build ID | 20260925 |
 | Platform | ESP32 klasik/WROOM-32 |
 | Protocol command | 5 |
 | Telemetry | v3, 20 byte |
-| Advertising BLE | NS200-CDI |
+| Advertising BLE | NS200-CDI (nama legacy kompatibel; produk tetap universal) |
 | Map | 4 slot, maksimum 32×16 |
 | Batas format RPM | 30.000 RPM |
 | Batas advance | -30,0° sampai +80,0° |
-| PPR maksimum | 10 |
+| PPR maksimum | 12 |
+| Target HV yang dapat diprogram | 180–345 V |
 
 Nilai source pada `main/cdi_r5_protocol.h` dan capability runtime adalah acuan, bukan nama folder atau dokumen lama.
+
+## Kontrak final dan ruang lingkup universal
+
+- Core Rev C dibekukan sebagai battery-powered CDI universal 9,5–16 V, satu pickup terproteksi, satu atau dua output CDI, PPR 1–12, empat map, dan load 0–100% yang saat ini berasal dari TPS.
+- Nilai map, limiter, advance, live tune, profil idle, dan mode kendaraan dipilih pengguna. Firmware tidak memakai lock berdasarkan merek/tipe motor.
+- Batas yang tidak dapat dimatikan hanya batas listrik/fisik: target charger maksimum 345 V, format advance −30°…+80°, advance tidak dapat mendahului sudut pickup, hardware FAULT_N, proteksi input, dan one-shot starter.
+- J1 dan seluruh JMOD Rev C tidak boleh dipetakan ulang untuk fitur baru. Sensor MAP/knock/multi-input memakai modul pintar I²C; input berlatensi rendah memakai GPIO27/STROBE melalui modul terproteksi; fault eksternal memakai FAULT_N.
+- U6/PCF8574 dipakai untuk deteksi dan kontrol lambat, bukan quickshifter atau trigger presisi karena polling 20 ms tidak deterministik untuk event pengapian.
+- Scope ini bukan ECU injeksi dan bukan TCI multi-coil. Kebutuhan tersebut harus menjadi modul pintar atau produk lain, bukan revisi pin Core.
+
+Kontrak pin, protokol additive, schema telemetry, dan envelope listrik di atas adalah design freeze. Perbaikan bug firmware berikutnya tidak boleh memaksa perubahan PCB atau harness.
 
 ## Source yang dikompilasi
 
@@ -285,7 +297,7 @@ CRC16-CCITT polynomial 0x1021, initial 0xFFFF, dihitung dari sequence sampai arg
 INFO,ESP32,R9,5,3,IGNITRA_R9_MODULAR
 VERSION,1,R9,9.5.0,20260925,ESP32,5,3
 IDENTITY,1,<serial>,SERIAL_V1,LOCAL_APP,0
-CAPS,7,30000,-300,800,32,16,4,10,...
+CAPS,7,30000,-300,800,32,16,4,12,...,UNIVERSAL_CDI,SIGNED_LIVE,HV_TARGET_MAX_345V
 MODULES,2,presentMask,activeMask,observedMask,faultMask,coreProfile,configuredMask,ioOk
 TIMING,2,mode,intensity,minRpm,maxRpm
 AUX,3,keylessOn,starterOn,auxPresent,inputEnabled,profile,requestMask,requestIoOk,mechanicalOn,contactSource,engineRunning,ignitionAllowed
@@ -301,6 +313,8 @@ Paket 20 byte little-endian, magic 0xCD15, sequence pada offset 4 dan CRC16 byte
 - DIAGNOSTIC: suhu, slot, limiter mode, flags, output flags, fault, trigger, pickup quality dan First Start timer.
 
 UUID, paket v3 dan arti bit lama tidak boleh diubah diam-diam. Fitur baru harus additive, memakai schema, dan diiklankan CAPS.
+
+`LIVE,loadIndex,rpmIndex,advanceCdeg` menerima nilai bertanda penuh −3000…+8000 centidegree. Tidak ada lagi pembatas perubahan ±2° per perintah; aplikasi menampilkan user agreement dan peringatan risiko tanpa mengunci tuning.
 
 ## Timing modes
 
@@ -321,7 +335,7 @@ GET,TIMING
 
 Default firmware v3: STANDARD 0/10 1150–1700; SOFT 2/10 1250–1550; RESPONSIVE 3/10 1200–1700; KUDA 4/10 1200–1600; DRUMBAND 5/10 1200–1650; FOMO 6/10 1150–1700; CUSTOM 4/10 1200–1650 RPM.
 
-SOFT/RESPONSIVE dibatasi ±2°. Profil ritmis mengayunkan timing bipolar per event dan dijepit ±8° dari map aktif; tidak ada fuel-cut atau spark-cut. Efek hanya aktif pada TPS ≤5%, retard dibatalkan 100 RPM dekat batas bawah, advance dibatalkan 100 RPM dekat batas atas, lalu kembali ke map utama di luar jendela. Idle standar NS200 tetap 1350–1450 RPM. KUDA/DRUMBAND/FOMO adalah nama profil IgniTra, bukan angka baku industri, sehingga baseline ini tetap memerlukan validasi prototipe.
+SOFT/RESPONSIVE dibatasi ±2°. Profil ritmis mengayunkan timing bipolar per event dan dijepit ±8° dari map aktif; tidak ada fuel-cut atau spark-cut. Efek hanya aktif pada TPS ≤5%, retard dibatalkan 100 RPM dekat batas bawah, advance dibatalkan 100 RPM dekat batas atas, lalu kembali ke map utama di luar jendela. Untuk profil NS200, idle referensi 1350–1450 RPM. Kendaraan lain wajib memakai rentang idle yang sesuai mesinnya. KUDA/DRUMBAND/FOMO adalah nama profil IgniTra, bukan angka baku universal.
 
 HV SIDE hanya dibaca ketika bit SIDE_DET dari U6 valid. Tanpa modul SIDE, firmware mengirim 0 V dan mengecualikan kanal tersebut dari keputusan `hv_enabled`; aplikasi menampilkannya sebagai N/A. Core tetap memakai pull-down 1 MΩ agar ADC tidak mengambang. Dengan resistor bawah modul 8,2 kΩ, beban paralel menjadi sekitar 8,13 kΩ (galat skala sekitar 0,8%), bukan 7,58 kΩ/sekitar 7,5% seperti pull-down 100 kΩ.
 
