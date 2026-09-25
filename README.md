@@ -1,6 +1,6 @@
-# IgniTra Universal CDI ESP32 R9 Modular
+# IgniTra CDI ESP32 R9 Modular
 
-Firmware ESP-IDF untuk IgniTra Universal CDI berbasis ESP32-WROOM-32 DevKit 38-pin. NS200 adalah salah satu profil kendaraan, bukan batas arsitektur. Core menjalankan satu kanal CDI CENTER; SIDE, THERMAL/FAN, OEM Learn, AUX, TPS Diagnostic, dan EXP adalah modul opsional.
+Firmware ESP-IDF untuk IgniTra CDI R9 berbasis ESP32-WROOM-32 DevKit 38-pin. NS200 dipertahankan sebagai preset awal dan kendaraan uji; dukungan lintas kendaraan ditentukan oleh konfigurasi mesin, bukan nama produk. Core menjalankan satu kanal CDI CENTER; SIDE, THERMAL/FAN, OEM Learn, AUX, TPS Diagnostic, dan EXP adalah modul opsional.
 
 README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kontrak aplikasi, pin/net, header modul, BOM, setup, build, uji dan keselamatan.
 
@@ -14,7 +14,7 @@ README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kont
 | Platform | ESP32 klasik/WROOM-32 |
 | Protocol command | 5 |
 | Telemetry | v3, 20 byte |
-| Advertising BLE | NS200-CDI (nama legacy kompatibel; produk tetap universal) |
+| Advertising BLE | NS200-CDI (identitas legacy kompatibel; produk tetap IgniTra CDI R9) |
 | Map | 4 slot, maksimum 32×16 |
 | Batas format RPM | 30.000 RPM |
 | Batas advance | -30,0° sampai +80,0° |
@@ -23,9 +23,9 @@ README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kont
 
 Nilai source pada `main/cdi_r5_protocol.h` dan capability runtime adalah acuan, bukan nama folder atau dokumen lama.
 
-## Kontrak final dan ruang lingkup universal
+## Kontrak final dan ruang lingkup lintas kendaraan
 
-- Core Rev C dibekukan sebagai battery-powered CDI universal 9,5–16 V, satu pickup terproteksi, satu atau dua output CDI, PPR 1–12, empat map, dan load 0–100% yang saat ini berasal dari TPS.
+- Core Rev C dibekukan sebagai battery-powered CDI lintas kendaraan 9,5–16 V, satu pickup terproteksi, satu atau dua output CDI, PPR 1–12, empat map, dan load 0–100% yang saat ini berasal dari TPS.
 - Nilai map, limiter, advance, live tune, profil idle, dan mode kendaraan dipilih pengguna. Firmware tidak memakai lock berdasarkan merek/tipe motor.
 - Batas yang tidak dapat dimatikan hanya batas listrik/fisik: target charger maksimum 345 V, format advance −30°…+80°, advance tidak dapat mendahului sudut pickup, hardware FAULT_N, proteksi input, dan one-shot starter.
 - J1 dan seluruh JMOD Rev C tidak boleh dipetakan ulang untuk fitur baru. Sensor MAP/knock/multi-input memakai modul pintar I²C; input berlatensi rendah memakai GPIO27/STROBE melalui modul terproteksi; fault eksternal memakai FAULT_N.
@@ -346,6 +346,10 @@ Referensi penetapan baseline:
 
 Referensi tersebut menetapkan metode dan envelope kerja, bukan angka universal untuk nama KUDA/DRUMBAND/FOMO. Nilai profil IgniTra di atas adalah baseline konservatif; hasil suara dan batas termalnya harus dikunci dari log RPM, timing, suhu mesin, dan pemeriksaan busi pada prototipe.
 
+## Uji BLE dengan ESP32 tanpa Core
+
+Uji protokol menggunakan ESP32 saja tidak mewakili pembacaan listrik Core: input ADC aki/HV/sensor dapat mengambang atau tidak valid. Firmware tidak boleh reboot atau memutus BLE karena keadaan tersebut. Command GATT kini hanya dimasukkan ke queue; parsing, perubahan konfigurasi, dan commit NVS dijalankan oleh task worker sehingga callback host NimBLE tidak tertahan oleh operasi flash. `SETUP,INSTALL` tetap atomik dan baru mengirim ACK setelah penyimpanan berhasil. Uji coil/HV/keyless/starter tetap wajib dilakukan dengan Core dan modul fisik yang benar.
+
 ## AUX, kontak dan starter
 
 Konfigurasi:
@@ -370,7 +374,7 @@ Aturan:
 
 1. CONTACT ON memberi izin pengapian sebelum K1 aktif.
 2. Starter ditolak jika AUX tidak present/enabled, kontak tidak aktif, tegangan/fault tidak aman, RPM terlalu tinggi, atau I²C gagal.
-3. UNIVERSAL_MANUAL juga mewajibkan NEUTRAL_IN.
+3. Profil MANUAL juga mewajibkan NEUTRAL_IN.
 4. K2 dilepas pada timeout, RPM ≥500, fault, tegangan tidak aman, I²C gagal atau modul dilepas.
 5. CONTACT OFF menjalankan K2 OFF → spark/charger HV OFF → K1 OFF.
 6. Aplikasi wajib membaca GET,AUX dan GET,STATUS setelah ACK.
