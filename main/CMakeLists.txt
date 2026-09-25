@@ -15,7 +15,7 @@ idf_component_register(
         "cdi_r8_ota.c"
         "cdi_selftest.c"
     INCLUDE_DIRS "."
-    REQUIRES driver esp_adc esp_timer nvs_flash esp_pm bt esp_driver_gptimer esp_driver_mcpwm esp_driver_uart app_update
+    REQUIRES driver esp_driver_i2c esp_adc esp_timer nvs_flash esp_pm bt esp_driver_gptimer esp_driver_mcpwm esp_driver_uart app_update
 )
 
 # Menekan peringatan perbedaan nama section IRAM antara deklarasi dan definisi fungsi

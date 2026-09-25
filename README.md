@@ -199,6 +199,8 @@ DET aktif-rendah dan didebounce. Modul yang dilepas langsung hilang dari present
 
 Output relay harus safe-default OFF saat boot/I²C gagal. K2 starter wajib melewati NE555 one-shot; output PCF tidak boleh langsung menahan transistor relay.
 
+Firmware ESP-IDF 6.1 memakai API `driver/i2c_master.h` dan komponen `esp_driver_i2c`; API legacy `driver/i2c.h` tidak digunakan. Bus berjalan 100 kHz, pull-up internal dimatikan karena Core menyediakan pull-up eksternal, filter glitch disetel 7 cycle, dan timeout transaksi 5 ms. U6/U7 tetap fail-safe: tiga kegagalan polling berturut-turut menghapus status present/request dan melepas izin output terkait.
+
 ## Blok penempatan PCB
 
 | Blok | Isi utama | Aturan penempatan |
