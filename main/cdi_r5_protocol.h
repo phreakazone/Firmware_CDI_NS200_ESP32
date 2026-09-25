@@ -11,8 +11,8 @@
 #include <stdint.h>
 
 #define CDI_FW_RELEASE "R9"
-#define CDI_FW_SEMVER "9.4.0"
-#define CDI_FW_BUILD_ID "20260924"
+#define CDI_FW_SEMVER "9.5.0"
+#define CDI_FW_BUILD_ID "20260925"
 #define CDI_DEVICE_SERIAL_LEN 32u
 
 typedef bool (*cdi_r5_persist_fn)(const cdi_r5_store_image_t *image,
@@ -30,6 +30,12 @@ enum {
     CDI_R9_AUX_ALL = 2
 };
 
+enum {
+    CDI_R9_CONTACT_OFF = 0,
+    CDI_R9_CONTACT_MECHANICAL = 1,
+    CDI_R9_CONTACT_KEYLESS = 2
+};
+
 typedef struct {
     cdi_r5_store_image_t *store;
     cdi_r5_map_t working;
@@ -45,6 +51,8 @@ typedef struct {
     bool firmware_update_active, map_staging_active, dyno_active;
     uint8_t module_present_mask;
     bool module_io_ok, aux_keyless_on, aux_starter_on;
+    bool aux_mechanical_on, aux_ignition_allowed, aux_engine_running;
+    uint8_t aux_contact_source;
     cdi_timing_config_t *timing;
     cdi_r9_timing_persist_fn timing_persist;
     void *timing_persist_context;
