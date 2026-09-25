@@ -205,5 +205,6 @@ See [hardware block/BOM guide](docs/HARDWARE_REV_C_BLOCKS_BOM.md) and [app/firmw
 - U6 PCF8574P alamat 0x20 menangani DET dan output AUX; U7 alamat 0x21 membaca KEYLESS_REQ, START_REQ, serta MODE_REQ/NEUTRAL_IN.
 - `AUX,KEYLESS,ON` memberi izin pengapian dan mengaktifkan K1. `AUX,START,PULSE,100..3000` mengaktifkan K2 sementara; K2 lepas saat RPM ≥500 atau terjadi fault.
 - `AUX,KEYLESS,OFF` dan `AUX,ALL,OFF` menjalankan CONTACT OFF: K2 OFF, spark/HV OFF, lalu K1 OFF.
+- K2 juga dibatasi U8 NE555 one-shot: 2.42 s nominal dan sekitar 2.93 s worst-case, sehingga PCF/I²C yang macet LOW tidak dapat menahan starter terus-menerus.
 - UNIVERSAL_MANUAL menolak starter tanpa NEUTRAL_IN. UNIVERSAL_MATIC tidak mewajibkan netral. Interlock OEM tetap harus dipertahankan.
 - Source firmware saja yang diperbarui; belum dibuild dan belum dijadikan artefak produksi.
