@@ -12,6 +12,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <string.h>
 
@@ -20,7 +21,7 @@ static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_telem_val_handle, s_resp_val_handle, s_ota_status_val_handle;
 
 #define COMMAND_QUEUE_DEPTH 8u
-#define COMMAND_WORKER_STACK 4096u
+#define COMMAND_WORKER_STACK 8192u
 #define COMMAND_WORKER_PRIORITY 5u
 
 typedef struct {
@@ -30,17 +31,35 @@ typedef struct {
 } command_job_t;
 
 static QueueHandle_t s_command_queue;
+static SemaphoreHandle_t s_notify_mutex;
+static volatile bool s_command_busy;
 
 static ble_uuid128_t uuid_from_str(const char *s);
 
+static int notify_packet(uint16_t conn_handle, uint16_t value_handle,
+                         const uint8_t *data, uint16_t length)
+{
+    int rc = BLE_HS_EBUSY;
+    if (data == NULL || length == 0u || conn_handle == BLE_HS_CONN_HANDLE_NONE ||
+        conn_handle != s_conn_handle || s_notify_mutex == NULL) return rc;
+    if (xSemaphoreTake(s_notify_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return rc;
+    if (conn_handle == s_conn_handle) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(data, length);
+        if (om != NULL) {
+            rc = ble_gatts_notify_custom(conn_handle, value_handle, om);
+        } else {
+            rc = BLE_HS_ENOMEM;
+        }
+    }
+    xSemaphoreGive(s_notify_mutex);
+    return rc;
+}
+
 static void notify_response(uint16_t conn_handle, const uint8_t *reply, size_t length)
 {
-    if (length == 0u || conn_handle == BLE_HS_CONN_HANDLE_NONE ||
-        conn_handle != s_conn_handle) return;
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(reply, (uint16_t)length);
-    if (om != NULL) {
-        (void)ble_gatts_notify_custom(conn_handle, s_resp_val_handle, om);
-    }
+    if (length == 0u) return;
+    int rc = notify_packet(conn_handle, s_resp_val_handle, reply, (uint16_t)length);
+    if (rc != 0) ESP_LOGW(TAG, "Response notify gagal rc=%d", rc);
 }
 
 /*
@@ -55,8 +74,14 @@ static void command_worker_task(void *arg)
     uint8_t reply[256];
     for (;;) {
         if (xQueueReceive(s_command_queue, &job, portMAX_DELAY) != pdTRUE) continue;
+        s_command_busy = true;
         size_t n = cdi_engine_handle_command(job.data, job.length, reply, sizeof(reply));
         notify_response(job.conn_handle, reply, n);
+        s_command_busy = false;
+        UBaseType_t remaining = uxTaskGetStackHighWaterMark(NULL);
+        if (remaining < 1024u) {
+            ESP_LOGW(TAG, "Stack worker BLE menipis: %u byte", (unsigned)remaining);
+        }
     }
 }
 
@@ -158,6 +183,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         cdi_engine_set_ble_connected(s_conn_handle != BLE_HS_CONN_HANDLE_NONE);
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGW(TAG, "BLE disconnect reason=0x%02x", event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         cdi_engine_set_ble_connected(false);
         cdi_ble_start_advertising();
@@ -202,15 +228,22 @@ static void nimble_host_task(void *param)
 void cdi_ble_init(void)
 {
     s_command_queue = xQueueCreate(COMMAND_QUEUE_DEPTH, sizeof(command_job_t));
-    if (s_command_queue == NULL) {
-        ESP_LOGE(TAG, "Gagal membuat command queue BLE");
+    s_notify_mutex = xSemaphoreCreateMutex();
+    if (s_command_queue == NULL || s_notify_mutex == NULL) {
+        ESP_LOGE(TAG, "Gagal membuat queue/mutex BLE");
+        if (s_command_queue != NULL) vQueueDelete(s_command_queue);
+        if (s_notify_mutex != NULL) vSemaphoreDelete(s_notify_mutex);
+        s_command_queue = NULL;
+        s_notify_mutex = NULL;
         return;
     }
     if (xTaskCreate(command_worker_task, "cdi_ble_cmd", COMMAND_WORKER_STACK,
                     NULL, COMMAND_WORKER_PRIORITY, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Gagal membuat command worker BLE");
         vQueueDelete(s_command_queue);
+        vSemaphoreDelete(s_notify_mutex);
         s_command_queue = NULL;
+        s_notify_mutex = NULL;
         return;
     }
     nimble_port_init();
@@ -235,20 +268,23 @@ static ble_uuid128_t uuid_from_str(const char *s)
 
 void cdi_ble_notify_ota_status(const uint8_t *data, uint16_t len)
 {
-    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(data, len);
-        if (om != NULL) { /* FIX: Cegah Memory Leak */
-            ble_gatts_notify_custom(s_conn_handle, s_ota_status_val_handle, om);
-        }
+    uint16_t conn = s_conn_handle;
+    if (conn != BLE_HS_CONN_HANDLE_NONE) {
+        int rc = notify_packet(conn, s_ota_status_val_handle, data, len);
+        if (rc != 0) ESP_LOGW(TAG, "OTA notify gagal rc=%d", rc);
     }
 }
 
 /* FIX: Fungsi pengiriman telemetri yang sebelumnya hilang */
 void cdi_ble_notify_telemetry(const uint8_t *data, uint16_t len)
 {
-    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(data, len);
-        if (om == NULL) return; /* FIX: Abaikan jika RAM penuh */
-        ble_gatts_notify_custom(s_conn_handle, s_telem_val_handle, om);
+    /* Jangan berebut mbuf/TX dengan ACK command, terutama saat commit NVS. */
+    if (s_command_busy) return;
+    uint16_t conn = s_conn_handle;
+    if (conn != BLE_HS_CONN_HANDLE_NONE) {
+        int rc = notify_packet(conn, s_telem_val_handle, data, len);
+        if (rc != 0 && rc != BLE_HS_EBUSY && rc != BLE_HS_ENOMEM) {
+            ESP_LOGW(TAG, "Telemetry notify gagal rc=%d", rc);
+        }
     }
 }
