@@ -32,6 +32,7 @@ Entry point: `main/main.c`.
 | `cdi_timebase.*` | penjadwalan pengapian GPTimer |
 | `cdi_engine_esp32.*` | ISR pickup, CENTER/SIDE, charger, fan, telemetry |
 | `cdi_r5.*` | map, limiter dan keputusan pengapian |
+| `cdi_r5_charger.*` | kontrol charger HV dan target tegangan |
 | `cdi_r5_protocol.*` | command protocol v5 dan commissioning |
 | `cdi_r5_ble.*`, `cdi_ble_nimble.*` | GATT dan telemetry v3 |
 | `cdi_module_io.*` | PCF8574 U6/U7, DET dan AUX I/O |
@@ -410,4 +411,3 @@ Jika `sdkconfig.defaults` berubah dan konfigurasi lokal lama masih tersimpan, la
 3. Perubahan protokol harus additive serta memiliki parser/test aplikasi.
 4. EFI belum menjadi capability R9.
 5. Folder build, binary, log dan patch sementara tidak boleh disimpan di repository.
-
