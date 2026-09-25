@@ -21,8 +21,8 @@ Jumlah sudah dibulatkan ke atas agar tersedia cadangan solder dan rework. Cocokk
 | UF4007 atau HER108 | 12 | rectifier/flyback |
 | 1N4007 | 5 | flyback fan relay |
 | BC337-40 C-B-E | 5 | QREL1/QREL2 |
-| BC557 E-B-C | 5 | QPC/QPS/QPRE1/QPRE2 |
-| 2N3904 E-B-C | 3 | SIDE driver |
+| 2N3906 E-B-C | 6 | QPC/QPS/QPRE1/QPRE2 dan cadangan |
+| 2N3904 E-B-C | 5 | SIDE driver, QKEY_SENSE, dan cadangan |
 | TIP122 B-C-E | 2 | fan relay coil |
 | IRFB4110 G-D-S | 3 | charger |
 | IRLZ44N G-D-S | 2 | strobe |
@@ -30,7 +30,7 @@ Jumlah sudah dibulatkan ke atas agar tersedia cadangan solder dan rework. Cocokk
 | PC817 atau EL817 DIP-4 | 4 | OEM Learn |
 | LM339N atau LM2901N DIP-14 | 2 | comparator |
 | TC4427A atau MIC4427 DIP-8 | 2 | pinout wajib dicocokkan |
-| PCF8574P DIP-16 | 2 | alamat 0x20 |
+| PCF8574P DIP-16 | 3 | U6=0x20, U7=0x21, satu cadangan |
 | Relay Omron G8NB-1U 12 V | 3 | relay automotive PCB setara boleh jika footprint diubah |
 | MKP/CBB22 1 µF 630 V | 3 | ukur jarak kaki aktual |
 | Elco 470 µF 50 V 105 °C low-ESR | 2 | input filter |
@@ -47,3 +47,7 @@ Jumlah sudah dibulatkan ke atas agar tersedia cadangan solder dan rework. Cocokk
 ## Komponen wajib tambahan untuk AUX aman
 
 Tambahkan QPRE1/QPRE2 BC557, RBPRE1/RBPRE2 4.7 kΩ dan RPREPU1/RPREPU2 10 kΩ. PCF8574 HIGH/power-up harus berarti relay OFF; PCF LOW mengaktifkan PNP pre-driver lalu BC337. Jangan menghubungkan EXP_IO1/2 langsung ke basis BC337.
+
+## Input request Rev C
+
+Tambahkan BAT54S SOT-23 ×5, SB560/Schottky ≥5 A 60 V ×4, resistor 47 kΩ ½ W ×5, serta 3.3 kΩ/22 kΩ/10 kΩ dan kapasitor 10 nF untuk J1.1/J1.8/J1.9. Nilai simbol boleh ditulis generik, tetapi footprint PCB wajib mengikuti body dan pitch komponen nyata.
