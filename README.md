@@ -9,7 +9,7 @@ README ini adalah dokumentasi tunggal repository firmware: sumber firmware, kont
 | Item | Nilai dari source |
 |---|---|
 | Release | R9 |
-| Semantic version | 9.6.2 |
+| Semantic version | 9.6.3 |
 | Build ID | 20260925 |
 | Platform | ESP32 klasik/WROOM-32 |
 | Protocol command | 5 |
@@ -346,13 +346,21 @@ Referensi penetapan baseline:
 
 Referensi tersebut menetapkan metode dan envelope kerja, bukan angka universal untuk nama KUDA/DRUMBAND/FOMO. Nilai profil IgniTra di atas adalah baseline konservatif; hasil suara dan batas termalnya harus dikunci dari log RPM, timing, suhu mesin, dan pemeriksaan busi pada prototipe.
 
+## Koreksi panic VHCI R9.6.3
+
+Log lapangan mengonfirmasi reboot nyata pada ESP32: `LoadProhibited` di `vhci_flow_on` dengan backtrace rusak. Penyebab yang ditutup pada R9.6.3 adalah pemanggilan `ble_gatts_notify_custom()` dari task engine/worker di luar task host NimBLE. Mutex R9.6.1 hanya mencegah dua task aplikasi masuk bersamaan, tetapi tidak memindahkan operasi ke konteks host sehingga belum cukup.
+
+R9.6.3 memakai dua antrean TX: antrean prioritas delapan paket untuk ACK/response dan status OTA, serta satu slot latest-value untuk telemetri agar paket lama tidak menumpuk. Event pada default event queue NimBLE menguras ACK/OTA lebih dahulu dan hanya callback event host tersebut yang membuat mbuf serta memanggil `ble_gatts_notify_custom()`. Command dan data OTA masuk satu FIFO worker 16 paket sehingga commit NVS maupun `esp_ota_write()` tidak lagi berjalan pada callback GATT dan urutan BEGIN/DATA/END tetap terjaga. Disconnect mengosongkan antrean TX sehingga paket dari connection handle lama tidak ikut terkirim setelah reconnect. UUID, payload command, telemetry v3, J1, JMOD, dan skematik tidak berubah.
+
+Peringatan `PCF8574 U6 tidak merespons; modul opsional fail-safe OFF` sesudah reboot adalah kondisi yang diharapkan saat menguji ESP32 tanpa PCB Core; itu bukan penyebab panic. Kriteria uji regresi: `SETUP,INSTALL,CORE,OEM_REMOVED`, perpindahan Dashboard/Setup, background/resume aplikasi, dan telemetri aktif tidak boleh menghasilkan reboot, `SW_CPU_RESET`, atau disconnect lokal.
+
 ## NVS setup journal R9.6.2
 
 Perubahan setup kecil—termasuk `SETUP,INSTALL,CORE,OEM_REMOVED`—sekarang menyimpan hanya struktur setup ke key NVS terpisah. Firmware tidak lagi menulis ulang seluruh blob empat map dan profil OEM untuk satu konfirmasi instalasi. Saat boot, journal setup divalidasi lalu di-overlay ke store utama dan CRC disegel ulang. Perubahan map/OEM tetap menulis store penuh. Ini mengurangi waktu flash stall pada jalur setup tanpa mengubah format protokol maupun pin hardware.
 
 ## Koreksi reconnect saat konfirmasi Core
 
-R9.6.1 menutup race TX yang masih ada pada R9.6.0: telemetri dan ACK sebelumnya dapat memanggil NimBLE secara bersamaan dari task berbeda tepat saat `SETUP,INSTALL` melakukan commit NVS. Implementasi final memakai satu mutex TX, menjeda telemetri selama command diproses, memperbesar stack worker command menjadi 8 KiB, menyediakan 32 blok mbuf kelas-1, dan membatasi satu koneksi aplikasi aktif. GAP mencatat `disconnect reason` serta worker mencatat stack watermark untuk diagnosis tanpa mengubah J1/JMOD atau logika setup.
+R9.6.1 menambahkan mutex TX, jeda telemetri selama command, stack worker 8 KiB, 32 blok mbuf kelas-1, dan satu koneksi aplikasi aktif. Log `vhci_flow_on` kemudian membuktikan mutex lintas task belum cukup karena pemanggilan notify masih terjadi di luar task host NimBLE. R9.6.3 menggantikan jalur tersebut dengan event queue host; pengaturan stack, pool mbuf, satu koneksi, log `disconnect reason`, dan stack watermark tetap dipertahankan.
 
 Hasil yang diwajibkan: menekan **Konfirmasi Pasang Core 1-Coil** menghasilkan `ACK,INSTALL_CORE` atau `ERR,STOP_ENGINE_WAIT_HV_LT30`; keduanya tidak boleh memulai reconnect. ESP32 tanpa Core boleh menghasilkan nilai ADC tidak valid, tetapi link BLE harus tetap hidup.
 
