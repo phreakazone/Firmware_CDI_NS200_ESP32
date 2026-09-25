@@ -760,7 +760,12 @@ void cdi_engine_tick_1ms(void)
             (cdi_r9_effective_module_mask(&store) & CDI_R9_MODULE_SIDE) &&
             store.oem_profile.valid && store.oem_profile.side_samples >= 10u;
         cdi_r5_store_seal(&store);
-        if (nvs_save_store(&store)) (void)nvs_fsproof_clear();
+        if (nvs_save_store(&store)) {
+            (void)nvs_save_setup(&store.setup);
+            s_persisted_store = store;
+            s_persisted_store_valid = true;
+            (void)nvs_fsproof_clear();
+        }
     }
 
     if (++divider < 10u) return;
