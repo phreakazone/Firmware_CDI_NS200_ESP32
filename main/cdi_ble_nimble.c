@@ -20,12 +20,17 @@ static const char *TAG = "cdi_ble";
 static volatile uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_telem_val_handle, s_resp_val_handle, s_ota_status_val_handle;
 
-#define COMMAND_QUEUE_DEPTH 8u
+#define BLE_WORK_QUEUE_DEPTH 16u
 #define COMMAND_WORKER_STACK 8192u
 #define COMMAND_WORKER_PRIORITY 5u
 #define TX_PRIORITY_QUEUE_DEPTH 8u
 #define TX_PAYLOAD_MAX 256u
 #define TX_HOST_BURST 8u
+
+enum {
+    WORK_KIND_COMMAND = 0,
+    WORK_KIND_OTA_DATA = 1,
+};
 
 enum {
     TX_KIND_TELEMETRY = 0,
@@ -36,8 +41,9 @@ enum {
 typedef struct {
     uint16_t conn_handle;
     uint16_t length;
+    uint8_t kind;
     uint8_t data[256];
-} command_job_t;
+} ble_work_job_t;
 
 typedef struct {
     uint16_t conn_handle;
@@ -47,7 +53,7 @@ typedef struct {
     uint8_t data[TX_PAYLOAD_MAX];
 } tx_job_t;
 
-static QueueHandle_t s_command_queue;
+static QueueHandle_t s_work_queue;
 static QueueHandle_t s_tx_priority_queue;
 static QueueHandle_t s_tx_telemetry_queue;
 static struct ble_npl_event s_tx_event;
@@ -185,13 +191,23 @@ static void notify_response(uint16_t conn_handle, const uint8_t *reply, size_t l
 static void command_worker_task(void *arg)
 {
     (void)arg;
-    command_job_t job;
+    ble_work_job_t job;
     uint8_t reply[256];
     for (;;) {
-        if (xQueueReceive(s_command_queue, &job, portMAX_DELAY) != pdTRUE) continue;
+        if (xQueueReceive(s_work_queue, &job, portMAX_DELAY) != pdTRUE) continue;
         s_command_busy = true;
-        size_t n = cdi_engine_handle_command(job.data, job.length, reply, sizeof(reply));
-        notify_response(job.conn_handle, reply, n);
+        if (job.kind == WORK_KIND_OTA_DATA) {
+            /*
+             * esp_ota_write() may stall on flash. Keep it off the NimBLE host
+             * task and in the same FIFO as commands so BEGIN/DATA/END order is
+             * preserved.
+             */
+            cdi_engine_handle_ota_data(job.data, job.length);
+        } else {
+            size_t n = cdi_engine_handle_command(job.data, job.length,
+                                                 reply, sizeof(reply));
+            notify_response(job.conn_handle, reply, n);
+        }
         s_command_busy = false;
         UBaseType_t remaining = uxTaskGetStackHighWaterMark(NULL);
         if (remaining < 1024u) {
@@ -205,17 +221,18 @@ static int command_write_cb(uint16_t conn_handle, uint16_t attr_handle,
 {
     (void)attr_handle; (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
-    command_job_t job = {
+    ble_work_job_t job = {
         .conn_handle = conn_handle,
         .length = OS_MBUF_PKTLEN(ctxt->om),
+        .kind = WORK_KIND_COMMAND,
     };
     if (job.length == 0u || job.length > sizeof(job.data) ||
         ble_hs_mbuf_to_flat(ctxt->om, job.data, job.length, NULL) != 0) {
         ESP_LOGW(TAG, "Frame command kosong/terlalu panjang; diabaikan");
         return 0;
     }
-    if (s_command_queue == NULL ||
-        xQueueSend(s_command_queue, &job, 0) != pdTRUE) {
+    if (s_work_queue == NULL ||
+        xQueueSend(s_work_queue, &job, 0) != pdTRUE) {
         ESP_LOGW(TAG, "Command queue penuh; frame ditolak tanpa memutus BLE");
     }
     return 0;
@@ -226,12 +243,21 @@ static int ota_data_write_cb(uint16_t conn_handle, uint16_t attr_handle,
 {
     (void)conn_handle; (void)attr_handle; (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
-    uint8_t buf[256];
-    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-    if (len > sizeof(buf)) len = sizeof(buf);
-    ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL);
-
-    cdi_engine_handle_ota_data(buf, len);
+    ble_work_job_t job = {
+        .conn_handle = conn_handle,
+        .length = OS_MBUF_PKTLEN(ctxt->om),
+        .kind = WORK_KIND_OTA_DATA,
+    };
+    if (job.length == 0u || job.length > sizeof(job.data) ||
+        ble_hs_mbuf_to_flat(ctxt->om, job.data, job.length, NULL) != 0) {
+        ESP_LOGW(TAG, "Frame OTA kosong/terlalu panjang; ditolak");
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    if (s_work_queue == NULL ||
+        xQueueSend(s_work_queue, &job, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "BLE work queue penuh; frame OTA ditolak");
+        return BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
     return 0;
 }
 
@@ -353,20 +379,20 @@ static void nimble_host_task(void *param)
 
 static void delete_ble_queues(void)
 {
-    if (s_command_queue != NULL) vQueueDelete(s_command_queue);
+    if (s_work_queue != NULL) vQueueDelete(s_work_queue);
     if (s_tx_priority_queue != NULL) vQueueDelete(s_tx_priority_queue);
     if (s_tx_telemetry_queue != NULL) vQueueDelete(s_tx_telemetry_queue);
-    s_command_queue = NULL;
+    s_work_queue = NULL;
     s_tx_priority_queue = NULL;
     s_tx_telemetry_queue = NULL;
 }
 
 void cdi_ble_init(void)
 {
-    s_command_queue = xQueueCreate(COMMAND_QUEUE_DEPTH, sizeof(command_job_t));
+    s_work_queue = xQueueCreate(BLE_WORK_QUEUE_DEPTH, sizeof(ble_work_job_t));
     s_tx_priority_queue = xQueueCreate(TX_PRIORITY_QUEUE_DEPTH, sizeof(tx_job_t));
     s_tx_telemetry_queue = xQueueCreate(1u, sizeof(tx_job_t));
-    if (s_command_queue == NULL || s_tx_priority_queue == NULL ||
+    if (s_work_queue == NULL || s_tx_priority_queue == NULL ||
         s_tx_telemetry_queue == NULL) {
         ESP_LOGE(TAG, "Gagal membuat queue BLE");
         delete_ble_queues();
