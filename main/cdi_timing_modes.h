@@ -5,13 +5,16 @@
 #include <stdint.h>
 
 #define CDI_TIMING_MAGIC 0x314D4954u /* TIM1 */
-#define CDI_TIMING_VERSION 1u
+#define CDI_TIMING_VERSION 2u
 
 typedef enum {
     CDI_TIMING_STANDARD = 0,
     CDI_TIMING_SOFT = 1,
     CDI_TIMING_RESPONSIVE = 2,
-    CDI_TIMING_KUDA = 3
+    CDI_TIMING_KUDA = 3,
+    CDI_TIMING_DRUMBAND = 4,
+    CDI_TIMING_FOMO = 5,
+    CDI_TIMING_CUSTOM = 6
 } cdi_timing_mode_t;
 
 typedef struct {

@@ -11,7 +11,8 @@
 enum {
     CDI_REQ_KEYLESS = 1u << 0,
     CDI_REQ_START = 1u << 1,
-    CDI_REQ_PIN9 = 1u << 2
+    CDI_REQ_PIN9 = 1u << 2,
+    CDI_REQ_IGNITION = 1u << 3
 };
 
 typedef enum {
@@ -29,7 +30,7 @@ typedef struct {
 } cdi_aux_input_config_t;
 
 /* U6 @0x20: P0..P4 DET, P5..P7 EXP outputs.
- * U7 @0x21: P0 KEYLESS, P1 START, P2 MODE/NEUTRAL; all active-low. */
+ * U7 @0x21: P0 KEYLESS, P1 START, P2 MODE/NEUTRAL, P3 mechanical IGN_12V sense; all active-low. */
 typedef struct {
     uint8_t output_latch;
     uint8_t present_mask;

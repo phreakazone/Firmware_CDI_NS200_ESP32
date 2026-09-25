@@ -8,7 +8,7 @@
 
 #define MOD_I2C_PORT I2C_NUM_0
 #define DET_MASK 0x1fu
-#define REQUEST_MASK 0x07u
+#define REQUEST_MASK 0x0fu
 #define EXP1_BIT (1u << 5)
 #define EXP2_BIT (1u << 6)
 #define EXP3_BIT (1u << 7)

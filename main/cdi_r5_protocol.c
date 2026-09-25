@@ -580,7 +580,7 @@ static size_t handle_r9_set(cdi_r5_protocol_t *p, unsigned long seq, char **save
     if (!strcmp(op, "TIMING")) {
         cdi_timing_config_t candidate;
         if (p->timing == NULL ||
-            !parse_uint(strtok_r(NULL, ",", save), CDI_TIMING_KUDA, &a) ||
+            !parse_uint(strtok_r(NULL, ",", save), CDI_TIMING_CUSTOM, &a) ||
             !parse_uint(strtok_r(NULL, ",", save), 10u, &b) ||
             !parse_int(strtok_r(NULL, ",", save), 500, 4000, &x) ||
             !parse_int(strtok_r(NULL, ",", save), 600, 5000, &y))
@@ -861,7 +861,7 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->tps_closed_adc,s->tps_open_adc,s->first_start_hv_volts,s->center_enabled,s->side_enabled,s->fan_mode,p->pickup_quality);
         } else if (what != NULL && strcmp(what, "CAPS") == 0) {
             n=snprintf(body,sizeof(body),
-                "CAPS,7,30000,-300,800,32,16,4,12,FAN,TEMP3,DYNO,PROFILE,OTA,OEM_LEARN,MANUAL,DIY,FIRST_START,MODULE_STATUS,MODULE_DET_PCF8574,TIMING_PRESETS,TIMING_KUDA,AUX_RELAY,AUX_INPUTS_U7,UNIVERSAL_MANUAL_INTERLOCK,QUICK_INSTALL,FW_VERSION,DEVICE_SERIAL,APP_LOCAL_BINDING");
+                "CAPS,7,30000,-300,800,32,16,4,10,FAN,DYNO,PROFILE,OEM_LEARN,MODULE_STATUS,TIMING_PRESETS,AUX_INPUTS_U7,QUICK_INSTALL,MECHANICAL_CONTACT_SENSE,ENGINE_CONTROL_ONE_BUTTON");
         } else if (what != NULL && strcmp(what, "INFO") == 0) {
             /* Additive query: existing commands/UUID/telemetry remain unchanged. */
             n=snprintf(body,sizeof(body),
@@ -904,16 +904,19 @@ size_t cdi_r5_protocol_handle(cdi_r5_protocol_t *p, const char *frame,
                 s->pulses_per_revolution,s->trigger_angle_cdeg/10u);
         } else if (what != NULL && strcmp(what, "TIMING") == 0 &&
                    p->timing != NULL) {
-            n=snprintf(body,sizeof(body),"TIMING,1,%u,%u,%u,%u",
+            n=snprintf(body,sizeof(body),"TIMING,2,%u,%u,%u,%u",
                 p->timing->mode,p->timing->intensity,
                 p->timing->min_rpm,p->timing->max_rpm);
         } else if (what != NULL && strcmp(what, "AUX") == 0) {
-            n=snprintf(body,sizeof(body),"AUX,2,%u,%u,%u,%u,%u,%u,%u",
+            n=snprintf(body,sizeof(body),"AUX,3,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
                 p->aux_keyless_on?1u:0u,p->aux_starter_on?1u:0u,
                 (p->module_present_mask&CDI_R9_MODULE_AUX)?1u:0u,
                 p->aux_input_config?p->aux_input_config->enabled:0u,
                 p->aux_input_config?p->aux_input_config->vehicle_profile:0u,
-                p->aux_request_mask,p->aux_request_io_ok?1u:0u);
+                p->aux_request_mask,p->aux_request_io_ok?1u:0u,
+                p->aux_mechanical_on?1u:0u,p->aux_contact_source,
+                p->aux_engine_running?1u:0u,
+                p->aux_ignition_allowed?1u:0u);
         } else if (what != NULL && strcmp(what, "TEMP") == 0) {
             const cdi_r7_setup_t *s=&p->store->setup;
             n=snprintf(body,sizeof(body),"TEMP,%u,%u,%u,%d,%u,%u",
