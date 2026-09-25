@@ -354,6 +354,8 @@ R9.6.3 memakai dua antrean TX: antrean prioritas delapan paket untuk ACK/respons
 
 Capability R9.6.3 juga mengumumkan `MANUAL` dan `DIY` sesuai command `MODE` yang memang diimplementasikan firmware. Ini mencegah aplikasi menolak pilihan commissioning tersebut karena daftar `CAPS` yang sebelumnya tidak lengkap.
 
+Respons `CAPS` lengkap panjangnya 223 karakter. Buffer body GET ditetapkan 240 byte; setelah sequence dan CRC, frame tetap di bawah batas antrean TX BLE 256 byte. Ukuran ini harus diperiksa kembali bila capability baru ditambahkan.
+
 Peringatan `PCF8574 U6 tidak merespons; modul opsional fail-safe OFF` sesudah reboot adalah kondisi yang diharapkan saat menguji ESP32 tanpa PCB Core; itu bukan penyebab panic. Kriteria uji regresi: `SETUP,INSTALL,CORE,OEM_REMOVED`, perpindahan Dashboard/Setup, background/resume aplikasi, dan telemetri aktif tidak boleh menghasilkan reboot, `SW_CPU_RESET`, atau disconnect lokal.
 
 ## NVS setup journal R9.6.2
