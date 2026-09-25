@@ -10,31 +10,76 @@
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 #include <string.h>
 
 static const char *TAG = "cdi_ble";
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_telem_val_handle, s_resp_val_handle, s_ota_status_val_handle;
 
+#define COMMAND_QUEUE_DEPTH 8u
+#define COMMAND_WORKER_STACK 4096u
+#define COMMAND_WORKER_PRIORITY 5u
+
+typedef struct {
+    uint16_t conn_handle;
+    uint16_t length;
+    uint8_t data[256];
+} command_job_t;
+
+static QueueHandle_t s_command_queue;
+
 static ble_uuid128_t uuid_from_str(const char *s);
+
+static void notify_response(uint16_t conn_handle, const uint8_t *reply, size_t length)
+{
+    if (length == 0u || conn_handle == BLE_HS_CONN_HANDLE_NONE ||
+        conn_handle != s_conn_handle) return;
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(reply, (uint16_t)length);
+    if (om != NULL) {
+        (void)ble_gatts_notify_custom(conn_handle, s_resp_val_handle, om);
+    }
+}
+
+/*
+ * SETUP/MAP commands may commit NVS. Flash commits must never run inside the
+ * NimBLE GATT access callback: doing so can starve the host and make Android
+ * report a disconnect/reconnect exactly while confirming installation.
+ */
+static void command_worker_task(void *arg)
+{
+    (void)arg;
+    command_job_t job;
+    uint8_t reply[256];
+    for (;;) {
+        if (xQueueReceive(s_command_queue, &job, portMAX_DELAY) != pdTRUE) continue;
+        size_t n = cdi_engine_handle_command(job.data, job.length, reply, sizeof(reply));
+        notify_response(job.conn_handle, reply, n);
+    }
+}
 
 static int command_write_cb(uint16_t conn_handle, uint16_t attr_handle,
                              struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     (void)conn_handle; (void)attr_handle; (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
-    uint8_t buf[256];
-    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-    if (len > sizeof(buf)) len = sizeof(buf);
-    ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL);
-
-    uint8_t reply[256];
-    size_t n = cdi_engine_handle_command(buf, len, reply, sizeof(reply));
-    if (n != 0 && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(reply, n);
-        if (om != NULL) { /* FIX: Cegah Memory Leak/Crash jika antrean penuh */
-            ble_gatts_notify_custom(s_conn_handle, s_resp_val_handle, om);
-        }
+    command_job_t job = {
+        .conn_handle = conn_handle,
+        .length = OS_MBUF_PKTLEN(ctxt->om),
+    };
+    if (job.length == 0u || job.length > sizeof(job.data) ||
+        ble_hs_mbuf_to_flat(ctxt->om, job.data, job.length, NULL) != 0) {
+        static const uint8_t invalid[] = "0:ERR,COMMAND_LENGTH*0000\n";
+        notify_response(conn_handle, invalid, sizeof(invalid) - 1u);
+        return 0;
+    }
+    if (s_command_queue == NULL ||
+        xQueueSend(s_command_queue, &job, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "Command queue penuh; frame ditolak tanpa memutus BLE");
+        static const uint8_t busy[] = "0:ERR,COMMAND_BUSY*0000\n";
+        notify_response(conn_handle, busy, sizeof(busy) - 1u);
     }
     return 0;
 }
@@ -159,6 +204,18 @@ static void nimble_host_task(void *param)
 
 void cdi_ble_init(void)
 {
+    s_command_queue = xQueueCreate(COMMAND_QUEUE_DEPTH, sizeof(command_job_t));
+    if (s_command_queue == NULL) {
+        ESP_LOGE(TAG, "Gagal membuat command queue BLE");
+        return;
+    }
+    if (xTaskCreate(command_worker_task, "cdi_ble_cmd", COMMAND_WORKER_STACK,
+                    NULL, COMMAND_WORKER_PRIORITY, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Gagal membuat command worker BLE");
+        vQueueDelete(s_command_queue);
+        s_command_queue = NULL;
+        return;
+    }
     nimble_port_init();
     gatt_svr_init();
     ble_hs_cfg.sync_cb = on_sync_cb;
