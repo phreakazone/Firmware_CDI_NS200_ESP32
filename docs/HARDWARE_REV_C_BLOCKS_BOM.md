@@ -93,11 +93,11 @@ Beri jarak antara resistor input OEM dan sisi output optocoupler.
 
 - A1 strobe: QSTROBE IRLZ44N, RSTR1 **100 Ω ½ W**, RSTR2 10 kΩ, JSTROBE 1×2.
 - A2 keyless: K1 G8NB-1U 12 V, QREL1 BC337, DREL1 UF4007, RREL1 680 Ω, RRELPD1 10 kΩ, JKEYLESS terminal 5.08 mm.
-- A3 starter: K2 G8NB-1U 12 V, QREL2 BC337, DREL2 UF4007, RREL2 680 Ω, RRELPD2 10 kΩ, JSTART terminal 5.08 mm.
+- A3 starter: U8 NE555P edge-triggered one-shot; CSTART_TRIG 10 nF, RSTART_TRIG 10 kΩ, DSTART_TRIG BAT85; RSTART_TIME 2.2 MΩ 1%, CSTART_TIME 1 µF X7R ±20%, CSTART_CTRL 10 nF; K2 G8NB-1U 12 V, QREL2 BC337, DREL2 UF4007, RREL2 680 Ω, RRELPD2 10 kΩ, JSTART terminal 5.08 mm.
 - A4 audio: RAUD1/RAUD2 1 kΩ; CAUD1/CAUD2 10 nF; JAUDIO/JAUDIO_OUT.
 - A5 interface: PMOD_AUX 2×6, RMDET_AUX 1 kΩ.
 
-QPRE1/QPRE2 2N3906, RBPRE1/RBPRE2 4.7 kΩ, dan RPREPU1/RPREPU2 10 kΩ sudah menjadi bagian skematik. PCF HIGH/power-up = relay OFF; PCF LOW = relay ON. K2 hanya memparalel tombol/coil relay starter OEM, bukan arus dinamo starter.
+QPRE1/RBPRE1/RPREPU1 memberi K1 safe-default HIGH=OFF. K2 memakai pulsa jatuh EXP_IO2 untuk memicu U8. Dengan t=1.1RC, nominal 2.42 s dan worst-case R +1%/C +20% sekitar 2.93 s; output PCF yang macet LOW tidak dapat menahan K2 terus-menerus. K2 hanya memparalel tombol/coil relay starter OEM, bukan arus dinamo starter.
 
 ## MODULE TPS dan EXP
 
