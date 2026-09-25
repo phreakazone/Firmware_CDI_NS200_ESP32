@@ -71,15 +71,12 @@ static int command_write_cb(uint16_t conn_handle, uint16_t attr_handle,
     };
     if (job.length == 0u || job.length > sizeof(job.data) ||
         ble_hs_mbuf_to_flat(ctxt->om, job.data, job.length, NULL) != 0) {
-        static const uint8_t invalid[] = "0:ERR,COMMAND_LENGTH*0000\n";
-        notify_response(conn_handle, invalid, sizeof(invalid) - 1u);
+        ESP_LOGW(TAG, "Frame command kosong/terlalu panjang; diabaikan");
         return 0;
     }
     if (s_command_queue == NULL ||
         xQueueSend(s_command_queue, &job, 0) != pdTRUE) {
         ESP_LOGW(TAG, "Command queue penuh; frame ditolak tanpa memutus BLE");
-        static const uint8_t busy[] = "0:ERR,COMMAND_BUSY*0000\n";
-        notify_response(conn_handle, busy, sizeof(busy) - 1u);
     }
     return 0;
 }
