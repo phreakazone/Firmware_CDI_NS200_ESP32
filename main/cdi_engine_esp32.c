@@ -65,13 +65,19 @@ static bool s_fan_on;
 static cdi_module_io_t s_module_io;
 static cdi_timing_config_t s_timing;
 static uint8_t s_timing_phase;
+static cdi_aux_input_config_t s_aux_input_config;
 static volatile bool s_aux_keyless_on, s_aux_starter_on;
+static volatile bool s_ignition_run_allowed = true;
 static volatile int64_t s_aux_starter_deadline_us;
+static uint8_t s_last_request_mask;
+
+static void force_safe_full(void);
 
 #define NVS_NAMESPACE "cdi_r5"
 #define NVS_KEY_STORE "store"
 #define NVS_KEY_FSPROOF "fsproof"
 #define NVS_KEY_TIMING "timing"
+#define NVS_KEY_AUX_INPUT "auxinput"
 
 static bool nvs_load_store(cdi_r5_store_image_t *image)
 {
@@ -153,27 +159,69 @@ static bool persist_timing(const cdi_timing_config_t *config, void *context)
     return err == ESP_OK;
 }
 
+static bool nvs_load_aux_input(cdi_aux_input_config_t *config)
+{
+    nvs_handle_t h;
+    size_t len = sizeof(*config);
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_get_blob(h, NVS_KEY_AUX_INPUT, config, &len);
+    nvs_close(h);
+    return err == ESP_OK && len == sizeof(*config) &&
+           cdi_aux_input_config_valid(config);
+}
+
+static bool persist_aux_input(const cdi_aux_input_config_t *config, void *context)
+{
+    nvs_handle_t h;
+    (void)context;
+    if (!cdi_aux_input_config_valid(config) ||
+        nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_set_blob(h, NVS_KEY_AUX_INPUT, config, sizeof(*config));
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK;
+}
+
 static bool aux_control(uint8_t channel, bool enable, uint16_t duration_ms,
                         void *context)
 {
     (void)context;
     if (channel == CDI_R9_AUX_ALL) {
+        /* CONTACT OFF: starter OFF -> spark/HV OFF -> keyless relay OFF. */
         s_aux_starter_on = false;
+        s_ignition_run_allowed = false;
+        force_safe_full();
         s_aux_keyless_on = false;
     } else if (channel == CDI_R9_AUX_KEYLESS) {
-        if (!enable) s_aux_starter_on = false;
-        s_aux_keyless_on = enable;
+        if (enable) {
+            s_ignition_run_allowed = true;
+            s_aux_keyless_on = true;
+        } else {
+            s_aux_starter_on = false;
+            s_ignition_run_allowed = false;
+            force_safe_full();
+            s_aux_keyless_on = false;
+        }
     } else if (channel == CDI_R9_AUX_STARTER) {
-        if (!enable) s_aux_starter_on = false;
-        else {
-            if (!s_aux_keyless_on || !s_battery_ok_state || protocol.rpm >= 300u ||
-                protocol.hardware_fault || duration_ms < 100u || duration_ms > 3000u)
+        if (!enable) {
+            s_aux_starter_on = false;
+        } else {
+            bool manual_neutral_ok =
+                s_aux_input_config.vehicle_profile != CDI_AUX_PROFILE_UNIVERSAL_MANUAL ||
+                (cdi_module_io_requests_healthy(&s_module_io) &&
+                 (cdi_module_io_request_mask(&s_module_io) & CDI_REQ_PIN9) != 0u);
+            if (!s_ignition_run_allowed || !s_aux_input_config.enabled ||
+                !s_battery_ok_state || protocol.rpm >= 300u ||
+                protocol.hardware_fault || !manual_neutral_ok ||
+                duration_ms < 100u || duration_ms > 3000u)
                 return false;
             s_aux_starter_on = true;
             s_aux_starter_deadline_us = esp_timer_get_time() +
                                         (int64_t)duration_ms * 1000;
         }
-    } else return false;
+    } else {
+        return false;
+    }
     return cdi_module_io_set_aux(&s_module_io, s_aux_keyless_on,
                                  s_aux_starter_on, false);
 }
@@ -332,7 +380,7 @@ static void IRAM_ATTR pickup_isr(void *arg)
     engine.output_permission = !protocol.strobe_active && engine.center_enabled &&
         store.setup.operating_mode == CDI_R8_OP_DIY &&
         store.setup.diy_oem_unplug_confirmed && s_battery_ok_state &&
-        !protocol.firmware_update_active;
+        s_ignition_run_allowed && !protocol.firmware_update_active;
     engine.pro_enabled = store.setup.pro_enabled != 0u;
     protocol.output_permission = engine.output_permission;
     protocol.pro_enabled = engine.pro_enabled;
@@ -413,6 +461,10 @@ void cdi_engine_init(void)
         cdi_timing_config_defaults(&s_timing);
         (void)persist_timing(&s_timing, NULL);
     }
+    if (!nvs_load_aux_input(&s_aux_input_config)) {
+        cdi_aux_input_config_defaults(&s_aux_input_config);
+        (void)persist_aux_input(&s_aux_input_config, NULL);
+    }
     if (cdi_module_io_init(&s_module_io) != ESP_OK)
         ESP_LOGE(TAG, "PCF8574 U6 tidak merespons; modul opsional fail-safe OFF");
 
@@ -439,9 +491,14 @@ void cdi_engine_init(void)
     cdi_r5_protocol_set_persist(&protocol, persist_maps, NULL);
     cdi_r9_protocol_attach_timing(&protocol, &s_timing, persist_timing, NULL);
     cdi_r9_protocol_attach_aux(&protocol, aux_control, NULL);
+    cdi_r9_protocol_attach_aux_inputs(&protocol, &s_aux_input_config,
+                                      persist_aux_input, NULL);
     (void)cdi_module_io_poll(&s_module_io);
     protocol.module_present_mask = cdi_module_io_present_mask(&s_module_io);
     protocol.module_io_ok = cdi_module_io_healthy(&s_module_io);
+    protocol.aux_request_mask = cdi_module_io_request_mask(&s_module_io);
+    protocol.aux_request_io_ok = cdi_module_io_requests_healthy(&s_module_io);
+    s_last_request_mask = protocol.aux_request_mask;
     cdi_r8_oem_learn_init(&oem_learner, engine.timer_hz);
     
     cdi_r8_protocol_attach_oem_learner(&protocol, &oem_learner);
@@ -485,11 +542,29 @@ void cdi_engine_tick_1ms(void)
         (void)cdi_module_io_poll(&s_module_io);
         protocol.module_present_mask = cdi_module_io_present_mask(&s_module_io);
         protocol.module_io_ok = cdi_module_io_healthy(&s_module_io);
-        if (!protocol.module_io_ok ||
-            !(protocol.module_present_mask & CDI_R9_MODULE_AUX)) {
+        protocol.aux_request_mask = cdi_module_io_request_mask(&s_module_io);
+        protocol.aux_request_io_ok = cdi_module_io_requests_healthy(&s_module_io);
+
+        bool aux_ready = protocol.module_io_ok &&
+            protocol.aux_request_io_ok && s_aux_input_config.enabled &&
+            (protocol.module_present_mask & CDI_R9_MODULE_AUX) != 0u;
+        if (!aux_ready) {
             s_aux_starter_on = false;
-            s_aux_keyless_on = false;
+            if (s_aux_keyless_on) {
+                s_ignition_run_allowed = false;
+                force_safe_full();
+                s_aux_keyless_on = false;
+            }
+        } else {
+            uint8_t rising = protocol.aux_request_mask &
+                             (uint8_t)~s_last_request_mask;
+            if ((rising & CDI_REQ_KEYLESS) != 0u)
+                (void)aux_control(CDI_R9_AUX_KEYLESS,
+                                  !s_aux_keyless_on, 0u, NULL);
+            if ((rising & CDI_REQ_START) != 0u)
+                (void)aux_control(CDI_R9_AUX_STARTER, true, 1500u, NULL);
         }
+        s_last_request_mask = protocol.aux_request_mask;
     }
     uint16_t battery_mv = cdi_r5_vbat_adc_to_mv(cdi_board_adc_raw(CDI_ADC_IDX_VBAT));
     bool battery_ok = battery_mv >= 9500u && battery_mv <= 16000u;
@@ -517,7 +592,7 @@ void cdi_engine_tick_1ms(void)
     engine.output_permission = !protocol.strobe_active && engine.center_enabled &&
         store.setup.operating_mode == CDI_R8_OP_DIY &&
         store.setup.diy_oem_unplug_confirmed && battery_ok &&
-        !protocol.firmware_update_active;
+        s_ignition_run_allowed && !protocol.firmware_update_active;
     engine.pro_enabled = store.setup.pro_enabled != 0u;
     protocol.output_permission = engine.output_permission;
     protocol.pro_enabled = engine.pro_enabled;
@@ -556,7 +631,7 @@ void cdi_engine_tick_1ms(void)
     if (s_aux_starter_on &&
         (esp_timer_get_time() >= s_aux_starter_deadline_us ||
          protocol.rpm >= 500u || fault_low || !s_battery_ok_state ||
-         !protocol.module_io_ok ||
+         !protocol.module_io_ok || !s_aux_input_config.enabled ||
          !(protocol.module_present_mask & CDI_R9_MODULE_AUX)))
         s_aux_starter_on = false;
     (void)cdi_module_io_set_aux(&s_module_io, s_aux_keyless_on,
