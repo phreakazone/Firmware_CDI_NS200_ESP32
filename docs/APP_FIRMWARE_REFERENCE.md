@@ -1355,7 +1355,7 @@ App control behavior:
 
 1. CONTACT ON sends `AUX,KEYLESS,ON`; firmware enables ignition permission before K1.
 2. START sends `AUX,START,PULSE,1500` (valid range 100..3000 ms).
-3. K2 releases at timeout, RPM >=500, fault, low/high battery, I2C failure, or AUX removal.
+3. Firmware requests K2 release at timeout, RPM >=500, fault, low/high battery, I2C failure, or AUX removal. Hardware U8 independently caps the physical K2 pulse at 2.42 s nominal / about 2.93 s worst-case even if the PCF output remains LOW.
 4. CONTACT OFF sends `AUX,ALL,OFF` or `AUX,KEYLESS,OFF`.
 5. Firmware performs K2 OFF, ignition permission OFF, gate/charger HV safe, then K1 OFF.
 6. App must query `GET,AUX` and `GET,STATUS` after every AUX ACK and never infer final state from the ACK alone.
