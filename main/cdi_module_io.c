@@ -12,6 +12,7 @@
 #define EXP2_BIT (1u << 6)
 #define EXP3_BIT (1u << 7)
 #define IO_TIMEOUT_MS 5
+#define OFFLINE_RETRY_TICKS 50u /* 50 x service 20 ms = 1 detik */
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_u6;
@@ -39,7 +40,7 @@ static esp_err_t init_bus(void)
         .glitch_ignore_cnt = 7u,
         .intr_priority = 0,
         .trans_queue_depth = 0,
-        .flags.enable_internal_pullup = false,
+        .flags.enable_internal_pullup = true, /* bench ESP32 tetap idle-HIGH tanpa Core */
     };
     esp_err_t err = i2c_new_master_bus(&config, &s_bus);
     if (err != ESP_OK) return err;
@@ -98,27 +99,35 @@ esp_err_t cdi_module_io_init(cdi_module_io_t *io)
     esp_err_t err = init_bus();
     if (err == ESP_OK) err = write_latch(io);
     io->healthy = err == ESP_OK;
+    io->retry_ticks = io->healthy ? 0u : OFFLINE_RETRY_TICKS;
 
     esp_err_t request_err = err == ESP_OK ?
         write_byte(s_u7, 0xffu) : err;
     io->request_healthy = request_err == ESP_OK;
+    io->request_retry_ticks = io->request_healthy ? 0u : OFFLINE_RETRY_TICKS;
     return err != ESP_OK ? err : request_err;
 }
 
 static bool poll_u6(cdi_module_io_t *io)
 {
+    if (!io->healthy && io->retry_ticks > 0u) {
+        --io->retry_ticks;
+        return false;
+    }
     uint8_t raw = 0xffu;
     esp_err_t err = s_u6 == NULL ? ESP_ERR_INVALID_STATE :
         i2c_master_receive(s_u6, &raw, 1u, IO_TIMEOUT_MS);
     if (err != ESP_OK) {
         if (io->consecutive_errors < 255u) ++io->consecutive_errors;
-        if (io->consecutive_errors >= 3u) {
+        if (io->consecutive_errors >= 3u || !io->healthy) {
             io->healthy = false;
             io->present_mask = 0u;
+            io->retry_ticks = OFFLINE_RETRY_TICKS;
         }
         return false;
     }
     io->consecutive_errors = 0u;
+    io->retry_ticks = 0u;
     io->healthy = true;
     uint8_t candidate = (uint8_t)(~raw) & DET_MASK;
     if (candidate != io->candidate_mask) {
@@ -134,19 +143,26 @@ static bool poll_u6(cdi_module_io_t *io)
 
 static bool poll_u7(cdi_module_io_t *io)
 {
+    if (!io->request_healthy && io->request_retry_ticks > 0u) {
+        --io->request_retry_ticks;
+        return false;
+    }
     uint8_t raw = 0xffu;
     esp_err_t err = s_u7 == NULL ? ESP_ERR_INVALID_STATE :
         i2c_master_receive(s_u7, &raw, 1u, IO_TIMEOUT_MS);
     if (err != ESP_OK) {
         if (io->request_consecutive_errors < 255u)
             ++io->request_consecutive_errors;
-        if (io->request_consecutive_errors >= 3u) {
+        if (io->request_consecutive_errors >= 3u ||
+            !io->request_healthy) {
             io->request_healthy = false;
             io->request_mask = 0u;
+            io->request_retry_ticks = OFFLINE_RETRY_TICKS;
         }
         return false;
     }
     io->request_consecutive_errors = 0u;
+    io->request_retry_ticks = 0u;
     io->request_healthy = true;
     uint8_t candidate = (uint8_t)(~raw) & REQUEST_MASK;
     if (candidate != io->request_candidate_mask) {
