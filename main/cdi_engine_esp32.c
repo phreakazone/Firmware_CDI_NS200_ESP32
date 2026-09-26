@@ -524,7 +524,8 @@ void cdi_engine_init(void)
         (void)persist_aux_input(&s_aux_input_config, NULL);
     }
     if (cdi_module_io_init(&s_module_io) != ESP_OK)
-        ESP_LOGE(TAG, "PCF8574 U6 tidak merespons; modul opsional fail-safe OFF");
+        ESP_LOGW(TAG,
+            "U6/U7 offline (normal tanpa PCB Core); retry 1 detik, modul fail-safe OFF");
 
     if (!nvs_load_store(&store) || cdi_r5_store_validate(&store) != CDI_R5_OK) {
         cdi_r5_load_defaults(&store);
