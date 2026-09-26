@@ -41,6 +41,9 @@ typedef struct {
     uint8_t request_candidate_mask;
     uint8_t request_stable_samples;
     uint8_t request_consecutive_errors;
+    /* Poll dipanggil setiap 20 ms; 50 tick = retry satu kali per detik. */
+    uint8_t retry_ticks;
+    uint8_t request_retry_ticks;
     bool healthy;
     bool request_healthy;
 } cdi_module_io_t;
