@@ -107,7 +107,9 @@ Pada harness NS200 standar, J1.1/J1.8/J1.9 tetap NC sampai kabel tambahan dipasa
 
 ## Header modul Rev C
 
-Core memakai male THT dan modul memakai female 2,54 mm; gunakan female long-tail hanya bila benar-benar ditumpuk. Header 2×6: kolom kiri 1–6 dan kanan 7–12. Header 2×3: baris 1–2, 3–4, 5–6.
+Freeze 5 memakai rail bertumpuk enam zona dalam satu garis: Z1 SIDE (posisi global 1–12), Z2 THERMAL (13–24), Z3 LEARN (25–30), Z4 AUX (31–42), Z5 TPS (43–48), dan Z6 EXP (49–60). Nomor global hanya referensi mekanik; nomor pin lokal dan net pada tabel di bawah tidak berubah. Setiap carrier modul mengulang keenam zona 1:1 memakai female long-tail sehingga urutan vertikal modul bebas.
+
+Header 2×6 tetap memakai kolom kiri 1–6 dan kanan 7–12; header 2×3 memakai baris 1–2, 3–4, 5–6. Z1 SIDE wajib memakai footprint split produksi: kontrol tetap 2,54 mm, pad BRIDGE_PLUS/COIL_SIDE dijauhkan, VIN_FILT/GND diperkuat, dan terdapat koridor tanpa tembaga 8 mm terhadap Z2. Header 2,54 mm biasa tidak boleh dipakai untuk bagian HV/power Z1.
 
 ### JMOD_SIDE 2×6
 
@@ -461,6 +463,8 @@ Jika `sdkconfig.defaults` berubah dan konfigurasi lokal lama masih tersimpan, la
 
 1. README ini adalah dokumentasi tunggal firmware dan hardware.
 2. Perubahan pin harus memperbarui `cdi_board_esp32.h`, skematik, aplikasi dan README.
-3. Perubahan protokol harus additive serta memiliki parser/test aplikasi.
-4. EFI belum menjadi capability R9.
-5. Folder build, binary, log dan patch sementara tidak boleh disimpan di repository.
+3. Perubahan mekanik rail/footprint tidak boleh mengubah nomor pin lokal atau net firmware; nomor global 1–60 hanya untuk fabrikasi.
+4. Semua carrier bertumpuk wajib mempertahankan koridor isolasi Z1 SIDE.
+5. Perubahan protokol harus additive serta memiliki parser/test aplikasi.
+6. EFI belum menjadi capability R9.
+7. Folder build, binary, log dan patch sementara tidak boleh disimpan di repository.
